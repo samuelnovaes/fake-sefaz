@@ -22,6 +22,12 @@ in `go.mod` and there will not be one: SOAP here is XML over HTTP, and
 capability the standard library does not have at all, and the pull request has
 to say which one.
 
+XSD validation is the one capability the standard library really lacks, and it
+still did not earn a dependency: every Go binding is cgo over libxml2, which
+would end the static build. `internal/xsd` implements the subset these schemas
+use instead. Extend that subset only when a published schema starts using
+something it does not cover, and say which schema in the pull request.
+
 ## 3. Non-negotiable rules
 
 1. All code, identifiers, file names, commit messages and documentation are in
@@ -46,6 +52,7 @@ internal/
   uf/                      The 27 states, cUF codes and authorizers
   status/                  cStat catalogue and its per model wording
   soap/                    Envelope decoding and encoding, gzip payloads, faults
+  xsd/                     Schema loading and instance validation
   authorizer/              Every rule: authorization, events, voiding
   nfe/                     Typed documents for models 55 and 65
   dfews/                   Table driven documents for 57, 67, 58, 63 and 66
@@ -88,9 +95,28 @@ model agnostic. A new SOAP model needs two things and nothing else:
 Only a model whose access key does not follow the NF-e field layout, the way
 CF-e SAT does not, needs a branch in `ParseAccessKey`.
 
-## 7. Tests
+## 7. Schemas
+
+The XSD packages are a download, never a commit. `make schemas` fetches them
+into `schemas/`, which is ignored by git, and `FAKE_SEFAZ_SCHEMA_DIR` turns
+validation on. The service has to keep working with the variable unset, so a
+schema is never a precondition for an operation: an unknown root is served, not
+refused.
+
+`internal/xsd/testdata` holds small schemas written for the tests. They exist so
+the suite runs with no download, and they are not copies of anything official.
+
+## 8. Tests
 
 Every operation is covered end to end through `httptest` in
 `internal/server`, driving real SOAP envelopes and asserting on the returned
 `cStat`. A new rejection rule is not done until a test drives the request that
 triggers it. The clock is injected; no test sleeps.
+
+`internal/xsd` is tested twice: against `testdata`, always, and against the
+published packages when `FAKE_SEFAZ_SCHEMA_DIR` points at them, skipped
+otherwise. Run the second one before touching the validator:
+
+```
+FAKE_SEFAZ_SCHEMA_DIR=$PWD/schemas go test ./...
+```

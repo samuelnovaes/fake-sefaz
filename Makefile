@@ -1,4 +1,4 @@
-.PHONY: build run test vet fmt
+.PHONY: build run test vet fmt schemas
 
 build:
 	go build -o bin/fake-sefaz ./cmd/fakesefaz
@@ -14,3 +14,6 @@ vet:
 
 fmt:
 	gofmt -l -w .
+
+schemas:
+	./scripts/download-schemas.sh schemas

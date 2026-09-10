@@ -33,6 +33,9 @@ func (s *Service) Handle(request authorizer.Context, message soap.Message) ([]by
 	if !known {
 		return nil, ErrUnknownOperation
 	}
+	if request.SchemaBroken() {
+		return []byte(s.answer(current, request.Environment, request.UFCode, status.RejectedSchema, current.model, nil).String()), nil
+	}
 	switch current.kind {
 	case kindReceive:
 		return s.receive(current, request, message)

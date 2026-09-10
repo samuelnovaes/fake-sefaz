@@ -34,6 +34,7 @@ It listens on `:8080` by default. Configuration comes from the environment:
 | `FAKE_SEFAZ_CANCELLATION_WINDOW` | `24h` | Cancellation deadline for model 55 |
 | `FAKE_SEFAZ_CANCELLATION_WINDOW_NFCE` | `30m` | Cancellation deadline for model 65 |
 | `FAKE_SEFAZ_MAX_DISTRIBUTION_DOCUMENTS` | `50` | Documents per `distDFeInt` answer |
+| `FAKE_SEFAZ_SCHEMA_DIR` | empty | Directory with the XSD packages; empty turns schema validation off |
 
 ## Pointing a client at it
 
@@ -97,6 +98,10 @@ synchronous authorization, `consSitBPe`/`consSitNF3e`, `consStatServBPe`/
 `distDFeInt` is served once and answers for every model, since it filters by
 CNPJ and environment and the store holds all of them.
 
+Business rules run after the schema, not instead of it. A document can be
+schema perfect and still be refused: a real NFC-e whose access key check digit
+does not match its own `cDV` passes every XSD and is answered `236`.
+
 Events per model:
 
 | Model | Events |
@@ -132,6 +137,49 @@ and six of document number. The document then lands in the same store as every
 other model, so `/admin/documents` lists it and `CancelarUltimaVenda` cancels it.
 
 `GET /admin/sat/commands` lists the fifteen commands and their success codes.
+
+## Schema validation
+
+Point the service at the published XSD packages and every request is validated
+against them before any rule runs. The packages are a download, not part of this
+repository:
+
+```
+make schemas
+FAKE_SEFAZ_SCHEMA_DIR=$PWD/schemas go run ./cmd/fakesefaz
+```
+
+The script pulls the NF-e, CT-e and MDF-e packages into `schemas/`, one folder
+each. Loading them logs how much was indexed:
+
+```
+msg="schemas loaded" documents=282 roots=147
+```
+
+A request whose root element has a schema is validated against the version the
+`versao` attribute asks for. `enviNFe` answers `225`, every other message
+answers `215`, and the offending path is logged:
+
+```
+schema="enviNFe/NFe/infNFe/ide/tpAmb: valor \"7\" fora da lista permitida"
+```
+
+A root with no schema is served as usual, so a partial download only narrows
+what is checked. `GET /admin/schemas` says what is loaded.
+
+The validator is written against the subset of XSD these schemas actually use,
+which is a narrow one: `sequence`, `choice`, `element` including `ref`, `any`,
+`attribute`, `anyAttribute`, `simpleContent` with `extension`, `include`,
+`import`, and the facets `pattern`, `enumeration`, `length`, `minLength`,
+`maxLength`, `minInclusive`, `maxInclusive` and `whiteSpace`. Several patterns
+inside one `restriction` are alternatives, as the specification says, while
+patterns along a derivation chain all have to pass. Patterns are compiled with
+`regexp`, and all 126 in the NF-e 4.00 package compile.
+
+What it does not do: `xs:group`, `xs:all`, substitution groups, complex type
+derivation, `xs:list`, `xs:union`, `totalDigits`, `fractionDigits`, and the
+identity constraints `unique`, `key` and `keyref`. None of them appear in the
+fiscal schemas. A wildcard is always treated as `processContents="skip"`.
 
 ## Rules that produce a rejection
 
@@ -180,6 +228,7 @@ a rule that never expires.
 | `GET /admin/units` | The 27 states, their `cUF` and their authorizers |
 | `GET /admin/models` | Document models, their XML vocabulary and their transport |
 | `GET /admin/sat/commands` | CF-e SAT commands and their success codes |
+| `GET /admin/schemas` | Whether schemas are loaded and which roots they cover |
 | `GET /admin/status-codes` | The `cStat` catalogue this service can answer |
 | `GET /admin/documents` | Authorized documents, filtered by `issuer`, `environment`, `model`, `afterNsu` |
 | `GET /admin/documents/{key}` | One document with its XML and its events |
@@ -201,8 +250,8 @@ receipt, is the same call with `{"asynchronous":true,"averageTime":3}`.
 
 - NFS-e, which is municipal and follows a different standard altogether. It does
   not belong in a stand-in for the state authorizers.
-- XSD validation. A malformed document is answered with `215` or `225` only
-  when it fails to unmarshal, not because a schema was checked.
+- Identity constraints and the exotic corners of XSD listed above. Everything
+  the fiscal schemas use is checked; nothing else is.
 - Signature verification. `297` is answered for a missing signature, never for
   a wrong one.
 - Persistence. State lives in memory and dies with the process.

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns="http://fake.sefaz/pedido"
+	targetNamespace="http://fake.sefaz/pedido" elementFormDefault="qualified" attributeFormDefault="unqualified">
+	<xs:include schemaLocation="tipos_v1.00.xsd"/>
+	<xs:element name="pedido">
+		<xs:complexType>
+			<xs:sequence>
+				<xs:element name="emitente">
+					<xs:complexType>
+						<xs:sequence>
+							<xs:element name="CNPJ" type="TCnpj"/>
+							<xs:element name="nome" type="TNome"/>
+						</xs:sequence>
+					</xs:complexType>
+				</xs:element>
+				<xs:element name="ambiente" type="TAmbiente"/>
+				<xs:choice>
+					<xs:sequence>
+						<xs:element name="entrega" minOccurs="0" type="TNome"/>
+						<xs:element name="prazo" minOccurs="0" type="TQuantidade"/>
+					</xs:sequence>
+					<xs:element name="retirada" type="TNome"/>
+				</xs:choice>
+				<xs:element name="item" maxOccurs="unbounded">
+					<xs:complexType>
+						<xs:sequence>
+							<xs:element name="codigo" type="TCodigo"/>
+							<xs:element name="quantidade" type="TQuantidade"/>
+						</xs:sequence>
+						<xs:attribute name="numero" type="xs:int" use="required"/>
+					</xs:complexType>
+				</xs:element>
+				<xs:element ref="observacao" minOccurs="0"/>
+			</xs:sequence>
+			<xs:attribute name="versao" type="xs:string" use="required"/>
+		</xs:complexType>
+	</xs:element>
+</xs:schema>

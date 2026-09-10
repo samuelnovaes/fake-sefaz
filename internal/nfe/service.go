@@ -60,6 +60,9 @@ func (s *Service) WebServices() []soap.Service { return WebServices() }
 
 func (s *Service) Handle(request authorizer.Context, message soap.Message) ([]byte, error) {
 	payload := message.Payload
+	if request.SchemaBroken() {
+		return s.schemaRejection(request)
+	}
 	switch request.Operation {
 	case "consStatServ":
 		return s.serviceStatus(request, payload)

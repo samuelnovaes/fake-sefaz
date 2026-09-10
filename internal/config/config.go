@@ -8,6 +8,7 @@ import (
 
 type Config struct {
 	Address                  string
+	SchemaDirectory          string
 	CancellationWindow       time.Duration
 	CancellationWindowNFCe   time.Duration
 	MaxDistributionDocuments int
@@ -16,6 +17,7 @@ type Config struct {
 func Load() Config {
 	return Config{
 		Address:                  text("FAKE_SEFAZ_ADDRESS", ":8080"),
+		SchemaDirectory:          text("FAKE_SEFAZ_SCHEMA_DIR", ""),
 		CancellationWindow:       duration("FAKE_SEFAZ_CANCELLATION_WINDOW", 24*time.Hour),
 		CancellationWindowNFCe:   duration("FAKE_SEFAZ_CANCELLATION_WINDOW_NFCE", 30*time.Minute),
 		MaxDistributionDocuments: number("FAKE_SEFAZ_MAX_DISTRIBUTION_DOCUMENTS", 50),

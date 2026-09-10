@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -20,6 +21,7 @@ func (s *Server) routeAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/models", s.models)
 	mux.HandleFunc("GET /admin/status-codes", s.statusCodes)
 	mux.HandleFunc("GET /admin/sat/commands", s.satCommands)
+	mux.HandleFunc("GET /admin/schemas", s.schemaCatalogue)
 	mux.HandleFunc("GET /admin/endpoints", s.endpoints)
 	mux.HandleFunc("GET /admin/documents", s.listDocuments)
 	mux.HandleFunc("GET /admin/documents/{key}", s.showDocument)
@@ -56,6 +58,20 @@ func (s *Server) statusCatalogue() []map[string]any {
 		entries = append(entries, map[string]any{"code": int(code), "message": message})
 	}
 	return entries
+}
+
+func (s *Server) schemaCatalogue(writer http.ResponseWriter, _ *http.Request) {
+	if s.schemas == nil {
+		write(writer, http.StatusOK, map[string]any{"loaded": false, "documents": 0, "roots": []string{}})
+		return
+	}
+	roots := s.schemas.Roots()
+	sort.Strings(roots)
+	write(writer, http.StatusOK, map[string]any{
+		"loaded":    true,
+		"documents": s.schemas.Documents(),
+		"roots":     roots,
+	})
 }
 
 func (s *Server) satCommands(writer http.ResponseWriter, _ *http.Request) {

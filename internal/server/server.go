@@ -13,6 +13,7 @@ import (
 	"github.com/vendermais/fake-sefaz/internal/status"
 	"github.com/vendermais/fake-sefaz/internal/store"
 	"github.com/vendermais/fake-sefaz/internal/uf"
+	"github.com/vendermais/fake-sefaz/internal/xsd"
 )
 
 const ForcedStatusHeader = "X-Fake-Sefaz-Status"
@@ -35,7 +36,7 @@ type Server struct {
 	routes     map[string]registration
 	operations map[string]bool
 	services   []soap.Service
-	extras     []http.Handler
+	schemas    *xsd.Set
 	logger     *slog.Logger
 	handler    http.Handler
 }
@@ -61,6 +62,25 @@ func New(engine *authorizer.Engine, logger *slog.Logger, handlers ...Handler) *S
 	mux.HandleFunc("/", server.handleSOAP)
 	server.handler = mux
 	return server
+}
+
+func (s *Server) UseSchemas(schemas *xsd.Set) {
+	s.schemas = schemas
+}
+
+func (s *Server) validate(message soap.Message) []authorizer.SchemaFailure {
+	if s.schemas == nil || !s.schemas.Knows(message.Operation) {
+		return nil
+	}
+	found, err := s.schemas.Validate(message.Operation, message.Version, message.Element)
+	if err != nil {
+		return nil
+	}
+	converted := make([]authorizer.SchemaFailure, 0, len(found))
+	for _, failure := range found {
+		converted = append(converted, authorizer.SchemaFailure{Path: failure.Path, Message: failure.Message})
+	}
+	return converted
 }
 
 func (s *Server) Mount(pattern string, handler http.Handler) {
@@ -100,22 +120,28 @@ func (s *Server) handleSOAP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	address := parseRoute(request.URL.Path)
+	failures := s.validate(message)
 	payload, err := route.handler.Handle(authorizer.Context{
-		Operation:    message.Operation,
-		UFCode:       address.UFCode,
-		Environment:  address.Environment,
-		ForcedStatus: forcedStatus(request),
+		Operation:      message.Operation,
+		UFCode:         address.UFCode,
+		Environment:    address.Environment,
+		ForcedStatus:   forcedStatus(request),
+		SchemaFailures: failures,
 	}, message)
 	if err != nil {
 		s.writeFault(writer, http.StatusInternalServerError, "Receiver", err.Error())
 		return
 	}
-	s.logger.Info("operation served",
+	attributes := []any{
 		"operation", message.Operation,
 		"uf", address.UFCode,
 		"environment", address.Environment,
 		"path", request.URL.Path,
-	)
+	}
+	if len(failures) > 0 {
+		attributes = append(attributes, "schema", failures[0].String(), "schemaFailures", len(failures))
+	}
+	s.logger.Info("operation served", attributes...)
 	writer.Header().Set("Content-Type", soap.ContentType)
 	writer.WriteHeader(http.StatusOK)
 	writer.Write(soap.Encode(route.endpoint.WSDLNamespace, route.endpoint.ResultTag, payload, message.Enveloped))

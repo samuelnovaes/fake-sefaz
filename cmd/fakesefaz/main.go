@@ -18,6 +18,7 @@ import (
 	"github.com/vendermais/fake-sefaz/internal/scenario"
 	"github.com/vendermais/fake-sefaz/internal/server"
 	"github.com/vendermais/fake-sefaz/internal/store"
+	"github.com/vendermais/fake-sefaz/internal/xsd"
 )
 
 func main() {
@@ -32,6 +33,17 @@ func main() {
 
 	handler := server.New(engine, logger, nfe.NewService(engine), dfews.NewService(engine))
 	handler.Mount("POST /sat/{command}", sat.NewService(engine))
+
+	if settings.SchemaDirectory != "" {
+		schemas, err := xsd.Load(settings.SchemaDirectory)
+		if err != nil {
+			logger.Error("schemas could not be loaded", "directory", settings.SchemaDirectory, "error", err)
+			os.Exit(1)
+		}
+		handler.UseSchemas(schemas)
+		logger.Info("schemas loaded", "directory", settings.SchemaDirectory,
+			"documents", schemas.Documents(), "roots", len(schemas.Roots()))
+	}
 
 	httpServer := &http.Server{
 		Addr:              settings.Address,

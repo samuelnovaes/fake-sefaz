@@ -48,11 +48,32 @@ func (e *Engine) Documents() *store.Store     { return e.documents }
 func (e *Engine) Scenarios() *scenario.Engine { return e.scenarios }
 func (e *Engine) Options() Options            { return e.options }
 
+type SchemaFailure struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
+func (f SchemaFailure) String() string {
+	return f.Path + ": " + f.Message
+}
+
 type Context struct {
-	Operation    string
-	UFCode       string
-	Environment  int
-	ForcedStatus status.Code
+	Operation      string
+	UFCode         string
+	Environment    int
+	ForcedStatus   status.Code
+	SchemaFailures []SchemaFailure
+}
+
+func (c Context) SchemaBroken() bool {
+	return len(c.SchemaFailures) > 0
+}
+
+func (c Context) SchemaReason() string {
+	if len(c.SchemaFailures) == 0 {
+		return ""
+	}
+	return c.SchemaFailures[0].String()
 }
 
 type Submission struct {

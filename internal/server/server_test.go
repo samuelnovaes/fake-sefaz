@@ -25,6 +25,7 @@ const issuerTaxID = "99999999000191"
 
 type harness struct {
 	server    *httptest.Server
+	handler   *Server
 	documents *store.Store
 	scenarios *scenario.Engine
 	clock     time.Time
@@ -43,6 +44,7 @@ func newHarness(t *testing.T) *harness {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	handler := New(engine, logger, nfe.NewService(engine), dfews.NewService(engine))
 	handler.Mount("POST /sat/{command}", sat.NewService(engine))
+	testHarness.handler = handler
 	testHarness.server = httptest.NewServer(handler)
 	t.Cleanup(testHarness.server.Close)
 	return testHarness
@@ -550,4 +552,8 @@ func quote(value string) string {
 		return `""`
 	}
 	return string(encoded)
+}
+
+func storeFilter() store.DocumentFilter {
+	return store.DocumentFilter{}
 }
