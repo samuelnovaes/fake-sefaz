@@ -10,8 +10,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/vendermais/fake-sefaz/internal/authorizer"
 	"github.com/vendermais/fake-sefaz/internal/config"
+	"github.com/vendermais/fake-sefaz/internal/dfews"
 	"github.com/vendermais/fake-sefaz/internal/nfe"
+	"github.com/vendermais/fake-sefaz/internal/sat"
 	"github.com/vendermais/fake-sefaz/internal/scenario"
 	"github.com/vendermais/fake-sefaz/internal/server"
 	"github.com/vendermais/fake-sefaz/internal/store"
@@ -21,17 +24,18 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	settings := config.Load()
 
-	documents := store.New()
-	scenarios := scenario.New()
-	service := nfe.NewService(documents, scenarios, nfe.Options{
+	engine := authorizer.New(store.New(), scenario.New(), authorizer.Options{
 		CancellationWindow:       settings.CancellationWindow,
 		CancellationWindowNFCe:   settings.CancellationWindowNFCe,
 		MaxDistributionDocuments: settings.MaxDistributionDocuments,
 	}, time.Now)
 
+	handler := server.New(engine, logger, nfe.NewService(engine), dfews.NewService(engine))
+	handler.Mount("POST /sat/{command}", sat.NewService(engine))
+
 	httpServer := &http.Server{
 		Addr:              settings.Address,
-		Handler:           server.New(documents, scenarios, service, logger),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

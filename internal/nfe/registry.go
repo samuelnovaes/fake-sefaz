@@ -4,17 +4,18 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"github.com/vendermais/fake-sefaz/internal/authorizer"
 
 	"github.com/vendermais/fake-sefaz/internal/status"
 	"github.com/vendermais/fake-sefaz/internal/uf"
 )
 
-func (s *Service) registration(request Request) ([]byte, error) {
+func (s *Service) registration(request authorizer.Context, payload []byte) ([]byte, error) {
 	var query ConsCad
-	if err := unmarshal(request.Payload, "ConsCad", &query); err != nil {
+	if err := unmarshal(payload, "ConsCad", &query); err != nil {
 		return encode(RetConsCad{Version: Version, Info: InfConsRet{
 			VerAplic: VerAplic, Status: int(status.RejectedSchema), Reason: status.Message(status.RejectedSchema),
-			QueriedAt: timestamp(s.now()),
+			QueriedAt: timestamp(s.engine.Now()),
 		}})
 	}
 	info := query.Info
@@ -25,7 +26,7 @@ func (s *Service) registration(request Request) ([]byte, error) {
 		TaxID:     info.TaxID,
 		StateID:   info.StateID,
 		Person:    info.Person,
-		QueriedAt: timestamp(s.now()),
+		QueriedAt: timestamp(s.engine.Now()),
 		UFCode:    unit.Code,
 	}
 	if !known {

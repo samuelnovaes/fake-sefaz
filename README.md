@@ -1,9 +1,21 @@
 # fake-sefaz
 
 A local stand-in for the SEFAZ web services, written in Go with the standard
-library only. It answers the NF-e 4.00 SOAP contract so a fiscal document can be
+library only. It answers the SOAP contracts of every electronic fiscal document
+the SEFAZ authorizes, plus the CF-e SAT equipment commands, so a document can be
 authorized, queried, cancelled and voided without an ICP-Brasil certificate, a
 CNPJ or an internet connection.
+
+| Model | Document | Transport |
+| --- | --- | --- |
+| 55 | NF-e | SOAP |
+| 65 | NFC-e | SOAP |
+| 57 | CT-e | SOAP |
+| 67 | CT-e OS | SOAP |
+| 58 | MDF-e | SOAP |
+| 63 | BP-e | SOAP |
+| 66 | NF3e | SOAP |
+| 59 | CF-e SAT | local equipment commands over JSON |
 
 It is a development and test dependency. It authorizes nothing that has legal
 value and it does not validate signatures cryptographically.
@@ -45,6 +57,8 @@ answer comes back bare as well.
 
 ## Web services
 
+NF-e and NFC-e:
+
 | Operation | Web service | Answer |
 | --- | --- | --- |
 | `consStatServ` | NFeStatusServico4 | `retConsStatServ` |
@@ -56,8 +70,68 @@ answer comes back bare as well.
 | `ConsCad` | CadConsultaCadastro4 | `retConsCad` |
 | `distDFeInt` | NFeDistribuicaoDFe | `retDistDFeInt` with gzipped `docZip` |
 
-Events: cancellation, cancellation by substitution, correction letter and the
-four recipient acknowledgements.
+CT-e and CT-e OS:
+
+| Operation | Web service | Answer |
+| --- | --- | --- |
+| `CTe` | CTeRecepcaoSincV4 | `retCTe` with `protCTe` |
+| `CTeOS` | CTeRecepcaoOSV4 | `retCTe` with `protCTe` |
+| `consSitCTe` | CTeConsultaV4 | `retConsSitCTe` with `procEventoCTe` |
+| `consStatServCte` | CTeStatusServicoV4 | `retConsStatServCte` |
+| `eventoCTe` | CTeRecepcaoEventoV4 | `retEventoCTe` |
+
+MDF-e:
+
+| Operation | Web service | Answer |
+| --- | --- | --- |
+| `MDFe` | MDFeRecepcaoSinc | `retMDFe` with `protMDFe` |
+| `consSitMDFe` | MDFeConsulta | `retConsSitMDFe` |
+| `consStatServMDFe` | MDFeStatusServico | `retConsStatServMDFe` |
+| `eventoMDFe` | MDFeRecepcaoEvento | `retEventoMDFe` |
+| `consMDFeNaoEnc` | MDFeConsNaoEnc | `retConsMDFeNaoEnc` |
+
+BP-e and NF3e follow the same five-operation shape: `BPe`/`NF3e` for the
+synchronous authorization, `consSitBPe`/`consSitNF3e`, `consStatServBPe`/
+`consStatServNF3e` and `eventoBPe`/`eventoNF3e`.
+
+`distDFeInt` is served once and answers for every model, since it filters by
+CNPJ and environment and the store holds all of them.
+
+Events per model:
+
+| Model | Events |
+| --- | --- |
+| NF-e, NFC-e | correction letter, cancellation, cancellation by substitution, and the four recipient acknowledgements |
+| CT-e, CT-e OS | correction letter, cancellation, EPEC, delivery receipt, service disagreement |
+| MDF-e | cancellation, closing, driver added, document added |
+| BP-e | cancellation, boarding missed, seat changed |
+| NF3e | cancellation |
+| CF-e SAT | cancellation, through `CancelarUltimaVenda` |
+
+A payload that arrives gzipped and base64 encoded inside a `*DadosMsg` element,
+the way MDF-e and NF3e clients send it, is inflated before the operation is
+resolved.
+
+## CF-e SAT
+
+Model 59 is not a web service: the SAT equipment issues the document locally and
+the application talks to it through a library, not over SOAP. The equipment is
+mocked as a JSON surface with the same commands and the same pipe delimited
+return string:
+
+```
+curl -X POST localhost:8080/sat/EnviarDadosVenda \
+  -d '{"numeroSessao":12345,"dadosVenda":"<CFe>...</CFe>"}'
+```
+
+The answer carries `retorno` verbatim, the same string already split into
+`campos`, and, for a sale, the minted access key. When the CF-e arrives without
+an `Id`, the equipment mints the 44 digit key the way a real SAT does, using the
+CF-e layout, which differs from the NF-e one: nine digits of equipment serial
+and six of document number. The document then lands in the same store as every
+other model, so `/admin/documents` lists it and `CancelarUltimaVenda` cancels it.
+
+`GET /admin/sat/commands` lists the fifteen commands and their success codes.
 
 ## Rules that produce a rejection
 
@@ -104,7 +178,8 @@ a rule that never expires.
 | `GET /admin/health` | Liveness and document count |
 | `GET /admin/endpoints` | URL catalogue per state and environment |
 | `GET /admin/units` | The 27 states, their `cUF` and their authorizers |
-| `GET /admin/models` | Document models and which ones are implemented |
+| `GET /admin/models` | Document models, their XML vocabulary and their transport |
+| `GET /admin/sat/commands` | CF-e SAT commands and their success codes |
 | `GET /admin/status-codes` | The `cStat` catalogue this service can answer |
 | `GET /admin/documents` | Authorized documents, filtered by `issuer`, `environment`, `model`, `afterNsu` |
 | `GET /admin/documents/{key}` | One document with its XML and its events |
@@ -124,12 +199,16 @@ receipt, is the same call with `{"asynchronous":true,"averageTime":3}`.
 
 ## What is not here
 
-- Models other than 55 and 65. `dfe.Models` already carries CT-e, CT-e OS,
-  MDF-e, CF-e, BP-e and NF3e, and the store and the access key are model
-  agnostic, but their web services and response documents are not written.
-- NFS-e, which is municipal and follows a different standard altogether.
+- NFS-e, which is municipal and follows a different standard altogether. It does
+  not belong in a stand-in for the state authorizers.
 - XSD validation. A malformed document is answered with `215` or `225` only
   when it fails to unmarshal, not because a schema was checked.
 - Signature verification. `297` is answered for a missing signature, never for
   a wrong one.
 - Persistence. State lives in memory and dies with the process.
+- Asynchronous authorization for the models other than NF-e and NFC-e. CT-e,
+  MDF-e, BP-e and NF3e are answered synchronously, which is how their current
+  layouts work anyway.
+- The MDF-e specific pair of codes for the non-closed query. `MDFeConsNaoEnc`
+  answers `138` and `137`, the generic located and not located codes, because
+  no `cStat` is invented here.

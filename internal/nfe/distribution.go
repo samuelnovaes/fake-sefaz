@@ -5,31 +5,32 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"fmt"
+	"github.com/vendermais/fake-sefaz/internal/authorizer"
 	"strconv"
 
 	"github.com/vendermais/fake-sefaz/internal/status"
 	"github.com/vendermais/fake-sefaz/internal/store"
 )
 
-func (s *Service) distribute(request Request) ([]byte, error) {
+func (s *Service) distribute(request authorizer.Context, payload []byte) ([]byte, error) {
 	var query DistDFeInt
-	if err := unmarshal(request.Payload, "distDFeInt", &query); err != nil {
+	if err := unmarshal(payload, "distDFeInt", &query); err != nil {
 		return encode(RetDistDFeInt{
 			Version: Version, Environment: request.Environment, VerAplic: VerAplic,
 			Status: int(status.RejectedSchema), Reason: status.Message(status.RejectedSchema),
-			RespondedAt: timestamp(s.now()),
+			RespondedAt: timestamp(s.engine.Now()),
 		})
 	}
-	environment := environmentOf(query.Environment, request.Environment)
+	environment := authorizer.Environment(query.Environment, request.Environment)
 	response := RetDistDFeInt{
 		Version:     Version,
 		Environment: environment,
 		VerAplic:    VerAplic,
-		RespondedAt: timestamp(s.now()),
+		RespondedAt: timestamp(s.engine.Now()),
 	}
 
 	selected := s.selectForDistribution(query, environment)
-	response.MaxNSU = fmt.Sprintf("%015d", s.documents.LastNSU())
+	response.MaxNSU = fmt.Sprintf("%015d", s.engine.Documents().LastNSU())
 	if len(selected) == 0 {
 		response.Status = int(status.NoDocumentFound)
 		response.Reason = status.Message(status.NoDocumentFound)
@@ -62,13 +63,13 @@ func (s *Service) distribute(request Request) ([]byte, error) {
 
 func (s *Service) selectForDistribution(query DistDFeInt, environment int) []store.Document {
 	if query.ConsChNFe.Key != "" {
-		document, found := s.documents.Document(query.ConsChNFe.Key)
+		document, found := s.engine.Documents().Document(query.ConsChNFe.Key)
 		if !found {
 			return nil
 		}
 		return []store.Document{document}
 	}
-	documents := s.documents.Documents(store.DocumentFilter{
+	documents := s.engine.Documents().Documents(store.DocumentFilter{
 		IssuerTaxID: query.Document(),
 		Environment: environment,
 		AfterNSU:    lastNSU(query),
@@ -82,8 +83,8 @@ func (s *Service) selectForDistribution(query DistDFeInt, environment int) []sto
 		}
 		return nil
 	}
-	if len(documents) > s.options.MaxDistributionDocuments {
-		documents = documents[:s.options.MaxDistributionDocuments]
+	if len(documents) > s.engine.Options().MaxDistributionDocuments {
+		documents = documents[:s.engine.Options().MaxDistributionDocuments]
 	}
 	return documents
 }

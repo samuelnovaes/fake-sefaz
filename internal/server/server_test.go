@@ -12,8 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vendermais/fake-sefaz/internal/authorizer"
 	"github.com/vendermais/fake-sefaz/internal/dfe"
+	"github.com/vendermais/fake-sefaz/internal/dfews"
 	"github.com/vendermais/fake-sefaz/internal/nfe"
+	"github.com/vendermais/fake-sefaz/internal/sat"
 	"github.com/vendermais/fake-sefaz/internal/scenario"
 	"github.com/vendermais/fake-sefaz/internal/store"
 )
@@ -34,11 +37,13 @@ func newHarness(t *testing.T) *harness {
 		scenarios: scenario.New(),
 		clock:     time.Date(2026, time.September, 10, 9, 0, 0, 0, time.UTC),
 	}
-	service := nfe.NewService(testHarness.documents, testHarness.scenarios, nfe.DefaultOptions(), func() time.Time {
+	engine := authorizer.New(testHarness.documents, testHarness.scenarios, authorizer.DefaultOptions(), func() time.Time {
 		return testHarness.clock
 	})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	testHarness.server = httptest.NewServer(New(testHarness.documents, testHarness.scenarios, service, logger))
+	handler := New(engine, logger, nfe.NewService(engine), dfews.NewService(engine))
+	handler.Mount("POST /sat/{command}", sat.NewService(engine))
+	testHarness.server = httptest.NewServer(handler)
 	t.Cleanup(testHarness.server.Close)
 	return testHarness
 }
@@ -114,7 +119,7 @@ func defaultDocument(number int64) documentOptions {
 		Number:        number,
 		Model:         dfe.ModelNFCe,
 		Environment:   2,
-		RecipientName: nfe.HomologationRecipientName,
+		RecipientName: dfe.HomologationName(dfe.ModelNFCe),
 		Sync:          1,
 		Signed:        true,
 	}
@@ -455,8 +460,9 @@ func TestEndpointCatalogueCoversEveryUnit(t *testing.T) {
 		t.Fatalf("expected 27 states plus the national environment, got %d", len(catalogue))
 	}
 	services, _ := catalogue[0]["services"].(map[string]any)
-	if len(services) != len(nfe.WebServices()) {
-		t.Fatalf("expected %d services per unit, got %d", len(nfe.WebServices()), len(services))
+	expected := len(nfe.WebServices()) + len(dfews.WebServices())
+	if len(services) != expected {
+		t.Fatalf("expected %d services per unit, got %d", expected, len(services))
 	}
 }
 
@@ -527,4 +533,21 @@ func TestAuthorizationIdentifiesProtocolByNumber(t *testing.T) {
 	if !strings.Contains(body, `<infProt Id="ID`+protocol+`">`) {
 		t.Fatalf("infProt must be identified by the protocol number: %s", body)
 	}
+}
+
+func readAll(t *testing.T, response *http.Response) string {
+	t.Helper()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	return string(body)
+}
+
+func quote(value string) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return `""`
+	}
+	return string(encoded)
 }

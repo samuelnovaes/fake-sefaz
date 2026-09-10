@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/vendermais/fake-sefaz/internal/nfe"
+	"github.com/vendermais/fake-sefaz/internal/authorizer"
 	"github.com/vendermais/fake-sefaz/internal/scenario"
 	"github.com/vendermais/fake-sefaz/internal/soap"
 	"github.com/vendermais/fake-sefaz/internal/status"
@@ -17,21 +17,58 @@ import (
 
 const ForcedStatusHeader = "X-Fake-Sefaz-Status"
 
-type Server struct {
-	documents *store.Store
-	scenarios *scenario.Engine
-	service   *nfe.Service
-	logger    *slog.Logger
-	handler   http.Handler
+type Handler interface {
+	Operations() map[string]soap.Endpoint
+	WebServices() []soap.Service
+	Handle(request authorizer.Context, message soap.Message) ([]byte, error)
 }
 
-func New(documents *store.Store, scenarios *scenario.Engine, service *nfe.Service, logger *slog.Logger) *Server {
-	server := &Server{documents: documents, scenarios: scenarios, service: service, logger: logger}
+type registration struct {
+	endpoint soap.Endpoint
+	handler  Handler
+}
+
+type Server struct {
+	engine     *authorizer.Engine
+	documents  *store.Store
+	scenarios  *scenario.Engine
+	routes     map[string]registration
+	operations map[string]bool
+	services   []soap.Service
+	extras     []http.Handler
+	logger     *slog.Logger
+	handler    http.Handler
+}
+
+func New(engine *authorizer.Engine, logger *slog.Logger, handlers ...Handler) *Server {
+	server := &Server{
+		engine:     engine,
+		documents:  engine.Documents(),
+		scenarios:  engine.Scenarios(),
+		routes:     map[string]registration{},
+		operations: map[string]bool{},
+		logger:     logger,
+	}
+	for _, handler := range handlers {
+		for operation, endpoint := range handler.Operations() {
+			server.routes[operation] = registration{endpoint: endpoint, handler: handler}
+			server.operations[operation] = true
+		}
+		server.services = append(server.services, handler.WebServices()...)
+	}
 	mux := http.NewServeMux()
 	server.routeAdmin(mux)
 	mux.HandleFunc("/", server.handleSOAP)
 	server.handler = mux
 	return server
+}
+
+func (s *Server) Mount(pattern string, handler http.Handler) {
+	mux, ok := s.handler.(*http.ServeMux)
+	if !ok {
+		return
+	}
+	mux.Handle(pattern, handler)
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -52,38 +89,36 @@ func (s *Server) handleSOAP(writer http.ResponseWriter, request *http.Request) {
 		s.writeFault(writer, http.StatusBadRequest, "Sender", "request body could not be read")
 		return
 	}
-	message, err := soap.Decode(body, nfe.Operations())
+	message, err := soap.Decode(body, s.operations)
 	if err != nil {
 		s.writeFault(writer, http.StatusBadRequest, "Sender", err.Error())
 		return
 	}
-	endpoint, known := nfe.Endpoint(message.Operation)
+	route, known := s.routes[message.Operation]
 	if !known {
 		s.writeFault(writer, http.StatusBadRequest, "Sender", "operation "+message.Operation+" is not served")
 		return
 	}
-	route := parseRoute(request.URL.Path)
-	payload, err := s.service.Handle(nfe.Request{
+	address := parseRoute(request.URL.Path)
+	payload, err := route.handler.Handle(authorizer.Context{
 		Operation:    message.Operation,
-		Version:      message.Version,
-		Payload:      message.Payload,
-		UFCode:       route.UFCode,
-		Environment:  route.Environment,
+		UFCode:       address.UFCode,
+		Environment:  address.Environment,
 		ForcedStatus: forcedStatus(request),
-	})
+	}, message)
 	if err != nil {
 		s.writeFault(writer, http.StatusInternalServerError, "Receiver", err.Error())
 		return
 	}
 	s.logger.Info("operation served",
 		"operation", message.Operation,
-		"uf", route.UFCode,
-		"environment", route.Environment,
+		"uf", address.UFCode,
+		"environment", address.Environment,
 		"path", request.URL.Path,
 	)
 	writer.Header().Set("Content-Type", soap.ContentType)
 	writer.WriteHeader(http.StatusOK)
-	writer.Write(soap.Encode(endpoint.WSDLNamespace, endpoint.ResultTag, payload, message.Enveloped))
+	writer.Write(soap.Encode(route.endpoint.WSDLNamespace, route.endpoint.ResultTag, payload, message.Enveloped))
 }
 
 func (s *Server) writeFault(writer http.ResponseWriter, code int, faultCode, reason string) {
@@ -92,16 +127,15 @@ func (s *Server) writeFault(writer http.ResponseWriter, code int, faultCode, rea
 	writer.Write(soap.Fault(faultCode, reason))
 }
 
-type route struct {
+type address struct {
 	UFCode      string
 	Environment int
 }
 
-func parseRoute(path string) route {
-	resolved := route{}
+func parseRoute(path string) address {
+	resolved := address{}
 	for _, segment := range strings.Split(strings.Trim(path, "/"), "/") {
-		normalized := strings.ToUpper(segment)
-		if unit, found := uf.ByAcronym(normalized); found && resolved.UFCode == "" {
+		if unit, found := uf.ByAcronym(strings.ToUpper(segment)); found && resolved.UFCode == "" {
 			resolved.UFCode = unit.Code
 			continue
 		}
@@ -111,9 +145,9 @@ func parseRoute(path string) route {
 		}
 		switch strings.ToLower(segment) {
 		case "producao", "production", "prod":
-			resolved.Environment = nfe.EnvironmentProduction
+			resolved.Environment = authorizer.EnvironmentProduction
 		case "homologacao", "homologation", "homolog", "sandbox":
-			resolved.Environment = nfe.EnvironmentHomologation
+			resolved.Environment = authorizer.EnvironmentHomologation
 		}
 	}
 	return resolved

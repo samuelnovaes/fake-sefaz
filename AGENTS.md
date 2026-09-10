@@ -42,18 +42,31 @@ to say which one.
 cmd/fakesefaz/main.go      Wiring and startup only
 internal/
   config/                  Environment loading
-  dfe/                     Access key, document models, event types
+  dfe/                     Access key, model vocabulary, generic parser, events
   uf/                      The 27 states, cUF codes and authorizers
-  status/                  cStat catalogue
-  soap/                    Envelope decoding and encoding, faults
-  nfe/                     Request and response documents, one file per operation
+  status/                  cStat catalogue and its per model wording
+  soap/                    Envelope decoding and encoding, gzip payloads, faults
+  authorizer/              Every rule: authorization, events, voiding
+  nfe/                     Typed documents for models 55 and 65
+  dfews/                   Table driven documents for 57, 67, 58, 63 and 66
+  sat/                     CF-e SAT equipment commands for model 59
   store/                   Documents, batches, voidings, protocol sequence
   scenario/                Forced outcomes and service state
   server/                  Routing, SOAP handler, admin API
 ```
 
-Dependency direction: `server` -> `nfe` -> `store`. The `nfe` package never
-imports `net/http`, and `store` never imports `nfe`.
+Dependency direction: `server` -> a model package -> `authorizer` -> `store`.
+A model package never imports `net/http`, `authorizer` never imports a model
+package, and `store` never imports either.
+
+Every rule that decides a `cStat` lives in `authorizer` and nowhere else. A
+model package only maps XML to `authorizer.Submission` and the result back to
+its own response document. When a rule has to change, it changes once.
+
+NF-e keeps typed structs because its contract is the richest one: a batch, a
+receipt, a registration query and the distribution service. The other SOAP
+models share one table driven implementation, because their documents are the
+same skeleton under different tag names, which `dfe.ModelSpec` carries.
 
 ## 5. File and package naming
 
@@ -64,13 +77,16 @@ imports `net/http`, and `store` never imports `nfe`.
 
 ## 6. Adding a document model
 
-The access key, the store and the protocol sequence are already model
-agnostic. A new model needs three things and nothing else:
+The access key, the store, the protocol sequence and every rule are already
+model agnostic. A new SOAP model needs two things and nothing else:
 
-1. Mark it implemented in `internal/dfe.modelSpecs`.
-2. Add its request and response documents under `internal/nfe`, or a sibling
-   package when the schema shares nothing with NF-e.
-3. Register its operations in `webServices` and `endpoints`.
+1. An entry in `internal/dfe.modelSpecs` with its namespace, version and tag
+   names, and its events in `internal/dfe.eventCatalogue`.
+2. An entry in `internal/dfews.operations` naming its request roots, its
+   response documents and its web service names.
+
+Only a model whose access key does not follow the NF-e field layout, the way
+CF-e SAT does not, needs a branch in `ParseAccessKey`.
 
 ## 7. Tests
 

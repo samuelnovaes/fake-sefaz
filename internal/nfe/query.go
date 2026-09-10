@@ -1,6 +1,7 @@
 package nfe
 
 import (
+	"github.com/vendermais/fake-sefaz/internal/authorizer"
 	"strconv"
 
 	"github.com/vendermais/fake-sefaz/internal/dfe"
@@ -8,9 +9,9 @@ import (
 	"github.com/vendermais/fake-sefaz/internal/store"
 )
 
-func (s *Service) batchResult(request Request) ([]byte, error) {
+func (s *Service) batchResult(request authorizer.Context, payload []byte) ([]byte, error) {
 	var query ConsReciNFe
-	if err := unmarshal(request.Payload, "consReciNFe", &query); err != nil {
+	if err := unmarshal(payload, "consReciNFe", &query); err != nil {
 		return encode(RetConsReciNFe{
 			Version: Version, Environment: request.Environment, VerAplic: VerAplic,
 			Status: int(status.RejectedSchema), Reason: status.Message(status.RejectedSchema), UFCode: request.UFCode,
@@ -18,19 +19,19 @@ func (s *Service) batchResult(request Request) ([]byte, error) {
 	}
 	response := RetConsReciNFe{
 		Version:     Version,
-		Environment: environmentOf(query.Environment, request.Environment),
+		Environment: authorizer.Environment(query.Environment, request.Environment),
 		VerAplic:    VerAplic,
 		Receipt:     query.Receipt,
 		UFCode:      request.UFCode,
 	}
-	batch, found := s.documents.Batch(query.Receipt)
+	batch, found := s.engine.Documents().Batch(query.Receipt)
 	if !found {
 		response.Status = int(status.BatchNotFound)
 		response.Reason = status.Message(status.BatchNotFound)
 		return encode(response)
 	}
 	response.UFCode = batch.UFCode
-	if s.now().Before(batch.ReleaseAt) {
+	if s.engine.Now().Before(batch.ReleaseAt) {
 		response.Status = int(status.BatchInProcess)
 		response.Reason = status.Message(status.BatchInProcess)
 		return encode(response)
@@ -38,7 +39,7 @@ func (s *Service) batchResult(request Request) ([]byte, error) {
 	response.Status = int(status.BatchProcessed)
 	response.Reason = status.Message(status.BatchProcessed)
 	for _, key := range batch.Keys {
-		document, exists := s.documents.Document(key)
+		document, exists := s.engine.Documents().Document(key)
 		if !exists {
 			continue
 		}
@@ -47,9 +48,9 @@ func (s *Service) batchResult(request Request) ([]byte, error) {
 	return encode(response)
 }
 
-func (s *Service) documentStatus(request Request) ([]byte, error) {
+func (s *Service) documentStatus(request authorizer.Context, payload []byte) ([]byte, error) {
 	var query ConsSitNFe
-	if err := unmarshal(request.Payload, "consSitNFe", &query); err != nil {
+	if err := unmarshal(payload, "consSitNFe", &query); err != nil {
 		return encode(RetConsSitNFe{
 			Version: Version, Environment: request.Environment, VerAplic: VerAplic,
 			Status: int(status.RejectedSchema), Reason: status.Message(status.RejectedSchema), UFCode: request.UFCode,
@@ -57,7 +58,7 @@ func (s *Service) documentStatus(request Request) ([]byte, error) {
 	}
 	response := RetConsSitNFe{
 		Version:     Version,
-		Environment: environmentOf(query.Environment, request.Environment),
+		Environment: authorizer.Environment(query.Environment, request.Environment),
 		VerAplic:    VerAplic,
 		UFCode:      request.UFCode,
 		Key:         query.Key,
@@ -69,7 +70,7 @@ func (s *Service) documentStatus(request Request) ([]byte, error) {
 		return encode(response)
 	}
 	response.UFCode = parsed.UFCode
-	document, found := s.documents.Document(parsed.Raw)
+	document, found := s.engine.Documents().Document(parsed.Raw)
 	if !found {
 		response.Status = int(status.RejectedNotFound)
 		response.Reason = status.Message(status.RejectedNotFound)

@@ -40,22 +40,25 @@ func ParseAccessKey(value string) (AccessKey, error) {
 	}
 	year, _ := strconv.Atoi(trimmed[2:4])
 	month, _ := strconv.Atoi(trimmed[4:6])
-	series, _ := strconv.Atoi(trimmed[22:25])
-	number, _ := strconv.ParseInt(trimmed[25:34], 10, 64)
-	issuance, _ := strconv.Atoi(trimmed[34:35])
 	check, _ := strconv.Atoi(trimmed[43:44])
 	key := AccessKey{
-		Raw:          trimmed,
-		UFCode:       trimmed[0:2],
-		Year:         2000 + year,
-		Month:        month,
-		IssuerTaxID:  trimmed[6:20],
-		Model:        Model(trimmed[20:22]),
-		Series:       series,
-		Number:       number,
-		IssuanceKind: issuance,
-		RandomCode:   trimmed[35:43],
-		CheckDigit:   check,
+		Raw:         trimmed,
+		UFCode:      trimmed[0:2],
+		Year:        2000 + year,
+		Month:       month,
+		IssuerTaxID: trimmed[6:20],
+		Model:       Model(trimmed[20:22]),
+		CheckDigit:  check,
+	}
+	if key.Model == ModelCFe {
+		key.Series, _ = strconv.Atoi(trimmed[22:31])
+		key.Number, _ = strconv.ParseInt(trimmed[31:37], 10, 64)
+		key.RandomCode = trimmed[37:43]
+	} else {
+		key.Series, _ = strconv.Atoi(trimmed[22:25])
+		key.Number, _ = strconv.ParseInt(trimmed[25:34], 10, 64)
+		key.IssuanceKind, _ = strconv.Atoi(trimmed[34:35])
+		key.RandomCode = trimmed[35:43]
 	}
 	if CheckDigit(trimmed[:43]) != check {
 		return key, ErrKeyCheckSum
@@ -103,4 +106,18 @@ func isDigits(value string) bool {
 		}
 	}
 	return len(value) > 0
+}
+
+func BuildSATAccessKey(ufCode string, issued time.Time, issuerTaxID string, deviceSerial int64, number int64, randomCode string) string {
+	body := fmt.Sprintf("%s%02d%02d%s%s%09d%06d%06s",
+		ufCode,
+		issued.Year()%100,
+		int(issued.Month()),
+		issuerTaxID,
+		string(ModelCFe),
+		deviceSerial,
+		number,
+		randomCode,
+	)
+	return body + strconv.Itoa(CheckDigit(body))
 }

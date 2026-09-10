@@ -2,6 +2,8 @@ package soap
 
 import (
 	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -32,6 +34,55 @@ type node struct {
 }
 
 func Decode(body []byte, operations map[string]bool) (Message, error) {
+	message, err := decode(body, operations)
+	if !errors.Is(err, ErrOperationNotFound) {
+		return message, err
+	}
+	inflated, found := inflate(body)
+	if !found {
+		return message, err
+	}
+	inflatedMessage, inflatedError := decode(inflated, operations)
+	if inflatedError != nil {
+		return message, err
+	}
+	inflatedMessage.Enveloped = bytes.Contains(body, []byte("Envelope"))
+	return inflatedMessage, nil
+}
+
+func inflate(body []byte) ([]byte, bool) {
+	decoder := xml.NewDecoder(bytes.NewReader(body))
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) || err != nil {
+			return nil, false
+		}
+		start, isStart := token.(xml.StartElement)
+		if !isStart || !strings.HasSuffix(start.Name.Local, "DadosMsg") {
+			continue
+		}
+		var content string
+		if err := decoder.DecodeElement(&content, &start); err != nil {
+			return nil, false
+		}
+		packed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(content))
+		if err != nil {
+			return nil, false
+		}
+		reader, err := gzip.NewReader(bytes.NewReader(packed))
+		if err != nil {
+			return nil, false
+		}
+		defer reader.Close()
+		plain, err := io.ReadAll(reader)
+		if err != nil {
+			return nil, false
+		}
+		return plain, true
+	}
+}
+
+func decode(body []byte, operations map[string]bool) (Message, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(body))
 	enveloped := false
 	for {
@@ -120,4 +171,15 @@ func Fault(code, reason string) []byte {
 	builder.WriteString(`</soap:Text></soap:Reason>`)
 	builder.WriteString(`</soap:Fault></soap:Body></soap:Envelope>`)
 	return builder.Bytes()
+}
+
+type Endpoint struct {
+	WSDLNamespace string `json:"wsdlNamespace"`
+	ResultTag     string `json:"resultTag"`
+}
+
+type Service struct {
+	Operation string `json:"operation"`
+	Name      string `json:"name"`
+	Models    string `json:"models"`
 }

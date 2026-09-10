@@ -3,111 +3,82 @@ package nfe
 import (
 	"encoding/xml"
 	"errors"
-	"time"
 
-	"github.com/vendermais/fake-sefaz/internal/scenario"
-	"github.com/vendermais/fake-sefaz/internal/status"
-	"github.com/vendermais/fake-sefaz/internal/store"
+	"github.com/vendermais/fake-sefaz/internal/authorizer"
+	"github.com/vendermais/fake-sefaz/internal/soap"
 )
-
-const HomologationRecipientName = "NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL"
 
 var ErrUnknownOperation = errors.New("unknown operation")
 
-type endpoint struct {
-	WSDLNamespace string
-	ResultTag     string
+var endpoints = map[string]soap.Endpoint{
+	"consStatServ": {WSDLNamespace: "http://www.portalfiscal.inf.br/nfe/wsdl/NFeStatusServico4", ResultTag: "nfeResultMsg"},
+	"enviNFe":      {WSDLNamespace: "http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4", ResultTag: "nfeResultMsg"},
+	"consReciNFe":  {WSDLNamespace: "http://www.portalfiscal.inf.br/nfe/wsdl/NFeRetAutorizacao4", ResultTag: "nfeResultMsg"},
+	"consSitNFe":   {WSDLNamespace: "http://www.portalfiscal.inf.br/nfe/wsdl/NFeConsultaProtocolo4", ResultTag: "nfeResultMsg"},
+	"inutNFe":      {WSDLNamespace: "http://www.portalfiscal.inf.br/nfe/wsdl/NFeInutilizacao4", ResultTag: "nfeResultMsg"},
+	"envEvento":    {WSDLNamespace: "http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4", ResultTag: "nfeResultMsg"},
+	"ConsCad":      {WSDLNamespace: "http://www.portalfiscal.inf.br/nfe/wsdl/CadConsultaCadastro4", ResultTag: "nfeResultMsg"},
+	"distDFeInt":   {WSDLNamespace: "http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe", ResultTag: "nfeDistDFeInteresseResult"},
 }
 
-var endpoints = map[string]endpoint{
-	"consStatServ": {"http://www.portalfiscal.inf.br/nfe/wsdl/NFeStatusServico4", "nfeResultMsg"},
-	"enviNFe":      {"http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4", "nfeResultMsg"},
-	"consReciNFe":  {"http://www.portalfiscal.inf.br/nfe/wsdl/NFeRetAutorizacao4", "nfeResultMsg"},
-	"consSitNFe":   {"http://www.portalfiscal.inf.br/nfe/wsdl/NFeConsultaProtocolo4", "nfeResultMsg"},
-	"inutNFe":      {"http://www.portalfiscal.inf.br/nfe/wsdl/NFeInutilizacao4", "nfeResultMsg"},
-	"envEvento":    {"http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4", "nfeResultMsg"},
-	"ConsCad":      {"http://www.portalfiscal.inf.br/nfe/wsdl/CadConsultaCadastro4", "nfeResultMsg"},
-	"distDFeInt":   {"http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe", "nfeDistDFeInteresseResult"},
+var webServices = []soap.Service{
+	{Operation: "enviNFe", Name: "NFeAutorizacao4", Models: "55, 65"},
+	{Operation: "consReciNFe", Name: "NFeRetAutorizacao4", Models: "55, 65"},
+	{Operation: "consSitNFe", Name: "NFeConsultaProtocolo4", Models: "55, 65"},
+	{Operation: "consStatServ", Name: "NFeStatusServico4", Models: "55, 65"},
+	{Operation: "inutNFe", Name: "NFeInutilizacao4", Models: "55, 65"},
+	{Operation: "envEvento", Name: "NFeRecepcaoEvento4", Models: "55, 65"},
+	{Operation: "ConsCad", Name: "CadConsultaCadastro4", Models: "55, 65"},
+	{Operation: "distDFeInt", Name: "NFeDistribuicaoDFe", Models: "55, 65"},
 }
 
-func Operations() map[string]bool {
-	names := make(map[string]bool, len(endpoints))
-	for name := range endpoints {
-		names[name] = true
+func WebServices() []soap.Service {
+	copied := make([]soap.Service, len(webServices))
+	copy(copied, webServices)
+	return copied
+}
+
+func Operations() map[string]soap.Endpoint {
+	copied := make(map[string]soap.Endpoint, len(endpoints))
+	for name, value := range endpoints {
+		copied[name] = value
 	}
-	return names
-}
-
-func Endpoint(operation string) (endpoint, bool) {
-	found, exists := endpoints[operation]
-	return found, exists
-}
-
-type Options struct {
-	CancellationWindow       time.Duration
-	CancellationWindowNFCe   time.Duration
-	MaxDistributionDocuments int
-}
-
-func DefaultOptions() Options {
-	return Options{
-		CancellationWindow:       24 * time.Hour,
-		CancellationWindowNFCe:   30 * time.Minute,
-		MaxDistributionDocuments: 50,
-	}
+	return copied
 }
 
 type Service struct {
-	documents *store.Store
-	scenarios *scenario.Engine
-	options   Options
-	clock     func() time.Time
+	engine *authorizer.Engine
 }
 
-func NewService(documents *store.Store, scenarios *scenario.Engine, options Options, clock func() time.Time) *Service {
-	if clock == nil {
-		clock = time.Now
-	}
-	return &Service{documents: documents, scenarios: scenarios, options: options, clock: clock}
+func NewService(engine *authorizer.Engine) *Service {
+	return &Service{engine: engine}
 }
 
-type Request struct {
-	Operation    string
-	Version      string
-	Payload      []byte
-	UFCode       string
-	Environment  int
-	ForcedStatus status.Code
-}
+func (s *Service) Operations() map[string]soap.Endpoint { return Operations() }
 
-func (s *Service) Handle(request Request) ([]byte, error) {
+func (s *Service) WebServices() []soap.Service { return WebServices() }
+
+func (s *Service) Handle(request authorizer.Context, message soap.Message) ([]byte, error) {
+	payload := message.Payload
 	switch request.Operation {
 	case "consStatServ":
-		return s.serviceStatus(request)
+		return s.serviceStatus(request, payload)
 	case "enviNFe":
-		return s.authorize(request)
+		return s.authorize(request, message.Version, payload)
 	case "consReciNFe":
-		return s.batchResult(request)
+		return s.batchResult(request, payload)
 	case "consSitNFe":
-		return s.documentStatus(request)
+		return s.documentStatus(request, payload)
 	case "inutNFe":
-		return s.void(request)
+		return s.void(request, payload)
 	case "envEvento":
-		return s.receiveEvents(request)
+		return s.receiveEvents(request, payload)
 	case "ConsCad":
-		return s.registration(request)
+		return s.registration(request, payload)
 	case "distDFeInt":
-		return s.distribute(request)
+		return s.distribute(request, payload)
 	}
 	return nil, ErrUnknownOperation
-}
-
-func (s *Service) now() time.Time {
-	return s.clock()
-}
-
-func timestamp(moment time.Time) string {
-	return moment.Format("2006-01-02T15:04:05-07:00")
 }
 
 func encode(document any) ([]byte, error) {
@@ -121,26 +92,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-type WebService struct {
-	Operation string
-	Name      string
-}
-
-var webServices = []WebService{
-	{"enviNFe", "NFeAutorizacao4"},
-	{"consReciNFe", "NFeRetAutorizacao4"},
-	{"consSitNFe", "NFeConsultaProtocolo4"},
-	{"consStatServ", "NFeStatusServico4"},
-	{"inutNFe", "NFeInutilizacao4"},
-	{"envEvento", "NFeRecepcaoEvento4"},
-	{"ConsCad", "CadConsultaCadastro4"},
-	{"distDFeInt", "NFeDistribuicaoDFe"},
-}
-
-func WebServices() []WebService {
-	copied := make([]WebService, len(webServices))
-	copy(copied, webServices)
-	return copied
 }

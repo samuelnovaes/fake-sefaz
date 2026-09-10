@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/vendermais/fake-sefaz/internal/dfe"
-	"github.com/vendermais/fake-sefaz/internal/nfe"
+	"github.com/vendermais/fake-sefaz/internal/sat"
 	"github.com/vendermais/fake-sefaz/internal/scenario"
 	"github.com/vendermais/fake-sefaz/internal/status"
 	"github.com/vendermais/fake-sefaz/internal/store"
@@ -19,6 +19,7 @@ func (s *Server) routeAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/units", s.units)
 	mux.HandleFunc("GET /admin/models", s.models)
 	mux.HandleFunc("GET /admin/status-codes", s.statusCodes)
+	mux.HandleFunc("GET /admin/sat/commands", s.satCommands)
 	mux.HandleFunc("GET /admin/endpoints", s.endpoints)
 	mux.HandleFunc("GET /admin/documents", s.listDocuments)
 	mux.HandleFunc("GET /admin/documents/{key}", s.showDocument)
@@ -57,6 +58,10 @@ func (s *Server) statusCatalogue() []map[string]any {
 	return entries
 }
 
+func (s *Server) satCommands(writer http.ResponseWriter, _ *http.Request) {
+	write(writer, http.StatusOK, sat.Commands())
+}
+
 func (s *Server) endpoints(writer http.ResponseWriter, request *http.Request) {
 	base := request.URL.Query().Get("base")
 	if base == "" {
@@ -65,8 +70,8 @@ func (s *Server) endpoints(writer http.ResponseWriter, request *http.Request) {
 	base = strings.TrimRight(base, "/")
 	catalogue := make([]map[string]any, 0)
 	for _, unit := range uf.All() {
-		services := make(map[string]map[string]string, len(nfe.WebServices()))
-		for _, service := range nfe.WebServices() {
+		services := make(map[string]map[string]string, len(s.services))
+		for _, service := range s.services {
 			services[service.Name] = map[string]string{
 				"homologacao": base + "/homologacao/" + unit.Acronym + "/" + service.Name,
 				"producao":    base + "/producao/" + unit.Acronym + "/" + service.Name,
@@ -205,8 +210,9 @@ func (s *Server) describe(writer http.ResponseWriter, request *http.Request) {
 		"service":     "fake-sefaz",
 		"path":        request.URL.Path,
 		"post":        "send the SEFAZ SOAP envelope to any path; the operation is read from the body",
-		"operations":  nfe.WebServices(),
-		"admin":       "/admin/health, /admin/endpoints, /admin/documents, /admin/scenarios, /admin/service, /admin/state",
+		"operations":  s.services,
+		"admin":       "/admin/health, /admin/endpoints, /admin/models, /admin/documents, /admin/scenarios, /admin/service, /admin/state",
+		"sat":         "POST /sat/{command} for the CF-e SAT equipment commands",
 		"forceHeader": ForcedStatusHeader,
 	})
 }
