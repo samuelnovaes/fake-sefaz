@@ -120,3 +120,19 @@ otherwise. Run the second one before touching the validator:
 ```
 FAKE_SEFAZ_SCHEMA_DIR=$PWD/schemas go test ./...
 ```
+
+## 9. Commits
+
+Commits are made through the `commit` skill, never with a hand written
+`git commit`. Every prompt ends with it: once the work the prompt asked for is
+finished, and before answering, invoke the skill whenever the working tree has
+changes. A prompt that changed no file has nothing to commit. The same holds
+when the request is only "commit".
+
+Several sessions share this checkout, so a session commits only what it wrote.
+Changes another session left in the tree stay out of the commits, staged around
+by path or by hunk, and the answer says what was left behind.
+
+The skill owns the details, and it overrides habit where the two disagree: one
+commit per purpose, staged path by path rather than with `git add -A`, and a
+Conventional Commits prefix on every subject. Never push unless asked.
