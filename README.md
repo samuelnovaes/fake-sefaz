@@ -191,6 +191,11 @@ client happen on their own:
 - `252` `tpAmb` different from the environment addressed by the URL
 - `297` document without a signature
 - `693` homologation document whose recipient name is not the required text
+- `629` NF-e or NFC-e with `finNFe` 1 where an item's `qCom` times `vUnCom`,
+  rounded half up to cents, differs from its `vProd` by more than R$ 0,01
+  (MOC rule I11-10)
+- `537` NF-e or NFC-e whose `ICMSTot/vDesc` differs from the sum of the items'
+  `vDesc` by more than R$ 0,01 (MOC rule W10-10)
 - `204` access key already authorized, or number already voided
 - `539` same issuer, model, series and number under a different access key
 - `217` query or event for a document that was never authorized

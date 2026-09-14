@@ -114,6 +114,82 @@ type documentOptions struct {
 	Sync          int
 	Signed        bool
 	Key           string
+	Purpose       int
+	Items         string
+	DiscountTotal string
+}
+
+func item(quantity, unitValue, value, discount string) string {
+	discountElement := ""
+	if discount != "" {
+		discountElement = `<vDesc>` + discount + `</vDesc>`
+	}
+	return `<det nItem="1"><prod><cProd>1</cProd><xProd>ITEM</xProd><qCom>` + quantity + `</qCom><vUnCom>` + unitValue +
+		`</vUnCom><vProd>` + value + `</vProd>` + discountElement + `</prod></det>`
+}
+
+func postAmounts(t *testing.T, number int64, purpose int, items, discountTotal string) string {
+	t.Helper()
+	testHarness := newHarness(t)
+	options := defaultDocument(number)
+	options.Purpose = purpose
+	options.Items = items
+	options.DiscountTotal = discountTotal
+	return statusOf(t, between(t, testHarness.post(t, "/homologacao/SP/NFeAutorizacao4", buildBatch(options), nil), "<protNFe", "</protNFe>"))
+}
+
+func TestAuthorizationChecksItemValueAgainstQuantityTimesUnitValue(t *testing.T) {
+	cases := []struct {
+		name     string
+		purpose  int
+		items    string
+		expected string
+	}{
+		{"exact product", 1, item("2.0000", "5.0000000000", "10.00", ""), "100"},
+		{"one cent above", 1, item("2.0000", "5.0000000000", "10.01", ""), "100"},
+		{"one cent below", 1, item("2.0000", "5.0000000000", "9.99", ""), "100"},
+		{"two cents apart", 1, item("2.0000", "5.0000000000", "10.02", ""), "629"},
+		{"half cent rounded up", 1, item("1.0000", "0.0050000000", "0.02", ""), "100"},
+		{"below half cent rounded down", 1, item("1.0000", "0.0049999999", "0.02", ""), "629"},
+		{"precision beyond float", 1, item("1234.5678", "9876.5432100001", "12193262.22", ""), "100"},
+		{"precision beyond float three cents apart", 1, item("1234.5678", "9876.5432100001", "12193262.25", ""), "629"},
+		{"second item wrong", 1, item("1.0000", "1.00", "1.00", "") + item("3", "3.33", "9.00", ""), "629"},
+		{"complementary document", 2, item("2.0000", "5.0000000000", "12.00", ""), "100"},
+		{"malformed quantity left to the schema", 1, item("2,0000", "5.0000000000", "12.00", "abc"), "100"},
+	}
+	for index, test := range cases {
+		if got := postAmounts(t, int64(300+index), test.purpose, test.items, ""); got != test.expected {
+			t.Errorf("%s: expected %s, got %s", test.name, test.expected, got)
+		}
+	}
+}
+
+func TestAuthorizationChecksDiscountTotalAgainstItems(t *testing.T) {
+	cases := []struct {
+		name          string
+		items         string
+		discountTotal string
+		expected      string
+	}{
+		{"no discount anywhere", item("1", "10.00", "10.00", ""), "0.00", "100"},
+		{"sum of item discounts", item("1", "19.99", "19.99", "19.99") + item("1", "14.99", "14.99", "14.99"), "34.98", "100"},
+		{"item without discount counts as zero", item("1", "5.00", "5.00", "1.50") + item("1", "5.00", "5.00", ""), "1.50", "100"},
+		{"one cent apart", item("1", "10.00", "10.00", "1.00"), "1.01", "100"},
+		{"total rounded up", item("1", "19.99", "19.99", "19.99") + item("1", "14.99", "14.99", "14.99"), "35.00", "537"},
+		{"discount only on the total", item("1", "10.00", "10.00", ""), "2.00", "537"},
+		{"discount only on the items", item("1", "10.00", "10.00", "2.00"), "0.00", "537"},
+	}
+	for index, test := range cases {
+		if got := postAmounts(t, int64(400+index), 1, test.items, test.discountTotal); got != test.expected {
+			t.Errorf("%s: expected %s, got %s", test.name, test.expected, got)
+		}
+	}
+}
+
+func TestItemValueIsCheckedBeforeDiscountTotal(t *testing.T) {
+	if got := postAmounts(t, 500, 1, item("2", "5.00", "11.00", "1.00"), "9.00"); got != "629" {
+		t.Fatalf("expected 629 before 537, got %s", got)
+	}
 }
 
 func defaultDocument(number int64) documentOptions {
@@ -141,18 +217,26 @@ func buildBatch(options documentOptions) string {
 	if options.RecipientName != "" {
 		recipient = `<dest><CPF>11144477735</CPF><xNome>` + options.RecipientName + `</xNome></dest>`
 	}
+	purpose := options.Purpose
+	if purpose == 0 {
+		purpose = 1
+	}
+	discountTotal := ""
+	if options.DiscountTotal != "" {
+		discountTotal = `<vDesc>` + options.DiscountTotal + `</vDesc>`
+	}
 	return fmt.Sprintf(`<enviNFe versao="4.00" xmlns="http://www.portalfiscal.inf.br/nfe">`+
 		`<idLote>1</idLote><indSinc>%d</indSinc>`+
 		`<NFe><infNFe Id="NFe%s" versao="4.00">`+
 		`<ide><cUF>35</cUF><cNF>12345678</cNF><natOp>Venda</natOp><mod>%s</mod><serie>1</serie><nNF>%d</nNF>`+
 		`<dhEmi>2026-09-10T09:00:00-03:00</dhEmi><tpNF>1</tpNF><idDest>1</idDest><cMunFG>3550308</cMunFG>`+
-		`<tpImp>4</tpImp><tpEmis>1</tpEmis><cDV>%s</cDV><tpAmb>%d</tpAmb><finNFe>1</finNFe><indFinal>1</indFinal>`+
+		`<tpImp>4</tpImp><tpEmis>1</tpEmis><cDV>%s</cDV><tpAmb>%d</tpAmb><finNFe>%d</finNFe><indFinal>1</indFinal>`+
 		`<indPres>1</indPres><procEmi>0</procEmi><verProc>fake</verProc></ide>`+
 		`<emit><CNPJ>%s</CNPJ><xNome>VENDER MAIS LTDA</xNome><IE>111111111111</IE></emit>`+
-		`%s`+
-		`<total><ICMSTot><vNF>10.00</vNF></ICMSTot></total>`+
+		`%s%s`+
+		`<total><ICMSTot>%s<vNF>10.00</vNF></ICMSTot></total>`+
 		`</infNFe>%s</NFe></enviNFe>`,
-		options.Sync, key, string(options.Model), options.Number, key[43:44], options.Environment, issuerTaxID, recipient, signature)
+		options.Sync, key, string(options.Model), options.Number, key[43:44], options.Environment, purpose, issuerTaxID, recipient, options.Items, discountTotal, signature)
 }
 
 func statusOf(t *testing.T, body string) string {

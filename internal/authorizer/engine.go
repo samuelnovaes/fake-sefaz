@@ -85,6 +85,9 @@ type Submission struct {
 	RecipientName     string
 	RecipientDocument string
 	Signed            bool
+	Purpose           int
+	Items             []Item
+	DiscountTotal     string
 	XML               string
 }
 
@@ -133,6 +136,9 @@ func (e *Engine) Authorize(submission Submission, context Context) Result {
 	expected := dfe.HomologationName(parsed.Model)
 	if environment == EnvironmentHomologation && expected != "" && submission.RecipientDocument != "" && submission.RecipientName != expected {
 		return refuse(result, status.RejectedHomologationName)
+	}
+	if code, rejected := amountRejection(submission); rejected {
+		return refuse(result, code)
 	}
 
 	if forced, matched := e.forced(context, scenario.Match{

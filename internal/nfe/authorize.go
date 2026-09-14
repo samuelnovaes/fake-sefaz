@@ -129,8 +129,24 @@ func submissionOf(document NFe) authorizer.Submission {
 		RecipientName:     info.Recipient.LegalName,
 		RecipientDocument: info.Recipient.Document(),
 		Signed:            document.Signature.SignatureValue != "",
+		Purpose:           info.Ide.Purpose,
+		Items:             itemsOf(info.Items),
+		DiscountTotal:     info.Total.ICMS.Discount,
 		XML:               `<NFe xmlns="` + Namespace + `">` + string(document.Inner) + `</NFe>`,
 	}
+}
+
+func itemsOf(details []Det) []authorizer.Item {
+	items := make([]authorizer.Item, 0, len(details))
+	for _, detail := range details {
+		items = append(items, authorizer.Item{
+			Quantity:  detail.Product.Quantity,
+			UnitValue: detail.Product.UnitValue,
+			Value:     detail.Product.Value,
+			Discount:  detail.Product.Discount,
+		})
+	}
+	return items
 }
 
 func protocolFrom(result authorizer.Result) ProtNFe {

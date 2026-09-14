@@ -36,9 +36,11 @@ const (
 	RejectedIssuerIrregular      Code = 301
 	RejectedRecipientIrregular   Code = 302
 	RejectedCancellationDeadline Code = 501
+	RejectedDiscountTotal        Code = 537
 	RejectedDuplicateOtherKey    Code = 539
 	RejectedDuplicateEvent       Code = 573
 	RejectedKeyMismatch          Code = 613
+	RejectedItemValue            Code = 629
 	RejectedHomologationName     Code = 693
 	RejectedUncatalogued         Code = 999
 )
@@ -76,9 +78,11 @@ var messages = map[Code]string{
 	RejectedIssuerIrregular:      "Rejeicao: Uso Denegado: Irregularidade fiscal do emitente",
 	RejectedRecipientIrregular:   "Rejeicao: Uso Denegado: Irregularidade fiscal do destinatario",
 	RejectedCancellationDeadline: "Rejeicao: Prazo de cancelamento superior ao previsto na legislacao",
+	RejectedDiscountTotal:        "Rejeicao: Total do Desconto difere do somatorio dos itens",
 	RejectedDuplicateOtherKey:    "Rejeicao: Duplicidade de NF-e com diferenca na Chave de Acesso",
 	RejectedDuplicateEvent:       "Rejeicao: Duplicidade de Evento",
 	RejectedKeyMismatch:          "Rejeicao: Chave de Acesso difere da existente em BD",
+	RejectedItemValue:            "Rejeicao: Valor do Produto difere do produto Valor Unitario de Comercializacao e Quantidade Comercial",
 	RejectedHomologationName:     "Rejeicao: NF-e emitida em ambiente de homologacao com Razao Social do destinatario diferente de NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL",
 	RejectedUncatalogued:         "Rejeicao: Erro nao catalogado",
 }

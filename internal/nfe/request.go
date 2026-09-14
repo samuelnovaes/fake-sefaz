@@ -32,6 +32,25 @@ type InfNFe struct {
 	Ide        Ide    `xml:"ide"`
 	Issuer     Party  `xml:"emit"`
 	Recipient  Party  `xml:"dest"`
+	Items      []Det  `xml:"det"`
+	Total      Total  `xml:"total"`
+}
+
+type Det struct {
+	Product Prod `xml:"prod"`
+}
+
+type Prod struct {
+	Quantity  string `xml:"qCom"`
+	UnitValue string `xml:"vUnCom"`
+	Value     string `xml:"vProd"`
+	Discount  string `xml:"vDesc"`
+}
+
+type Total struct {
+	ICMS struct {
+		Discount string `xml:"vDesc"`
+	} `xml:"ICMSTot"`
 }
 
 type Ide struct {
@@ -44,6 +63,7 @@ type Ide struct {
 	Environment  int    `xml:"tpAmb"`
 	IssuanceKind int    `xml:"tpEmis"`
 	CheckDigit   int    `xml:"cDV"`
+	Purpose      int    `xml:"finNFe"`
 }
 
 type Party struct {
