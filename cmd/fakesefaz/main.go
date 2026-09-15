@@ -28,6 +28,8 @@ func main() {
 	engine := authorizer.New(store.New(), scenario.New(), authorizer.Options{
 		CancellationWindow:       settings.CancellationWindow,
 		CancellationWindowNFCe:   settings.CancellationWindowNFCe,
+		SubstitutionWindow:       settings.SubstitutionWindow,
+		OfflineDeadline:          settings.OfflineDeadline,
 		MaxDistributionDocuments: settings.MaxDistributionDocuments,
 	}, time.Now)
 

@@ -62,8 +62,13 @@ func (s *Service) authorize(request authorizer.Context, version string, payload 
 	protocols := make([]ProtNFe, 0, len(batch.Documents))
 	ufCode := request.UFCode
 	environment := request.Environment
+	lost := false
 	for _, document := range batch.Documents {
 		result := s.engine.Authorize(submissionOf(document), request)
+		if status.RefusesRequest(result.Status) {
+			return s.rejectBatch(request, result.Status)
+		}
+		lost = lost || result.AnswerLost
 		protocols = append(protocols, protocolFrom(result))
 		ufCode = firstNonEmpty(result.UFCode, ufCode)
 		if environment == 0 {
@@ -82,7 +87,7 @@ func (s *Service) authorize(request authorizer.Context, version string, payload 
 		response.Status = int(status.BatchProcessed)
 		response.Reason = status.Message(status.BatchProcessed)
 		response.Protocol = &protocols[0]
-		return encode(response)
+		return deliver(response, lost)
 	}
 
 	receipt := s.engine.Documents().NextProtocol(ufCode, now)
@@ -103,7 +108,7 @@ func (s *Service) authorize(request authorizer.Context, version string, payload 
 	response.Status = int(status.BatchReceived)
 	response.Reason = status.Message(status.BatchReceived)
 	response.Receipt = &InfRec{Receipt: receipt, AverageTime: average}
-	return encode(response)
+	return deliver(response, lost)
 }
 
 func (s *Service) rejectBatch(request authorizer.Context, code status.Code) ([]byte, error) {
@@ -121,29 +126,42 @@ func (s *Service) rejectBatch(request authorizer.Context, code status.Code) ([]b
 func submissionOf(document NFe) authorizer.Submission {
 	info := document.Info
 	return authorizer.Submission{
-		Key:               accessKeyOf(info.Identifier),
-		UFCode:            info.Ide.UFCode,
-		Environment:       info.Ide.Environment,
-		IssuerTaxID:       info.Issuer.Document(),
-		DigestValue:       document.Signature.SignedInfo.Reference.DigestValue,
-		RecipientName:     info.Recipient.LegalName,
-		RecipientDocument: info.Recipient.Document(),
-		Signed:            document.Signature.SignatureValue != "",
-		Purpose:           info.Ide.Purpose,
-		Items:             itemsOf(info.Items),
-		DiscountTotal:     info.Total.ICMS.Discount,
-		XML:               `<NFe xmlns="` + Namespace + `">` + string(document.Inner) + `</NFe>`,
+		Key:                accessKeyOf(info.Identifier),
+		UFCode:             info.Ide.UFCode,
+		Environment:        info.Ide.Environment,
+		IssuerTaxID:        info.Issuer.Document(),
+		DigestValue:        document.Signature.SignedInfo.Reference.DigestValue,
+		RecipientName:      info.Recipient.LegalName,
+		RecipientDocument:  info.Recipient.Document(),
+		RecipientForeignID: info.Recipient.ForeignID,
+		RecipientStateID:   info.Recipient.StateID,
+		Signed:             document.Signature.SignatureValue != "",
+		Purpose:            info.Ide.Purpose,
+		IssuedAt:           info.Ide.IssuedAt,
+		Items:              itemsOf(info.Items),
+		DiscountTotal:      info.Total.ICMS.Discount,
+		Total:              info.Total.ICMS.Invoice,
+		ICMSTotal:          info.Total.ICMS.Tax,
+		XML:                `<NFe xmlns="` + Namespace + `">` + string(document.Inner) + `</NFe>`,
 	}
 }
 
 func itemsOf(details []Det) []authorizer.Item {
 	items := make([]authorizer.Item, 0, len(details))
 	for _, detail := range details {
+		product := detail.Product
 		items = append(items, authorizer.Item{
-			Quantity:  detail.Product.Quantity,
-			UnitValue: detail.Product.UnitValue,
-			Value:     detail.Product.Value,
-			Discount:  detail.Product.Discount,
+			Code:           product.Code,
+			EAN:            product.EAN,
+			Description:    product.Description,
+			NCM:            product.NCM,
+			CFOP:           product.CFOP,
+			Unit:           product.Unit,
+			Quantity:       product.Quantity,
+			UnitValue:      product.UnitValue,
+			Value:          product.Value,
+			Discount:       product.Discount,
+			TotalIndicator: product.TotalIndicator,
 		})
 	}
 	return items

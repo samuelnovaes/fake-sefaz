@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -128,6 +129,10 @@ func (s *Server) handleSOAP(writer http.ResponseWriter, request *http.Request) {
 		ForcedStatus:   forcedStatus(request),
 		SchemaFailures: failures,
 	}, message)
+	if errors.Is(err, authorizer.ErrAnswerLost) {
+		s.logger.Info("answer lost by scenario", "operation", message.Operation, "path", request.URL.Path)
+		panic(http.ErrAbortHandler)
+	}
 	if err != nil {
 		s.writeFault(writer, http.StatusInternalServerError, "Receiver", err.Error())
 		return

@@ -1,6 +1,8 @@
 package authorizer
 
 import (
+	"errors"
+	"strconv"
 	"time"
 
 	"github.com/vendermais/fake-sefaz/internal/dfe"
@@ -15,9 +17,13 @@ const (
 	EnvironmentHomologation = 2
 )
 
+var ErrAnswerLost = errors.New("answer lost by scenario")
+
 type Options struct {
 	CancellationWindow       time.Duration
 	CancellationWindowNFCe   time.Duration
+	SubstitutionWindow       time.Duration
+	OfflineDeadline          time.Duration
 	MaxDistributionDocuments int
 }
 
@@ -25,6 +31,8 @@ func DefaultOptions() Options {
 	return Options{
 		CancellationWindow:       24 * time.Hour,
 		CancellationWindowNFCe:   30 * time.Minute,
+		SubstitutionWindow:       168 * time.Hour,
+		OfflineDeadline:          24 * time.Hour,
 		MaxDistributionDocuments: 50,
 	}
 }
@@ -76,19 +84,26 @@ func (c Context) SchemaReason() string {
 	return c.SchemaFailures[0].String()
 }
 
+type Item = store.Item
+
 type Submission struct {
-	Key               string
-	UFCode            string
-	Environment       int
-	IssuerTaxID       string
-	DigestValue       string
-	RecipientName     string
-	RecipientDocument string
-	Signed            bool
-	Purpose           int
-	Items             []Item
-	DiscountTotal     string
-	XML               string
+	Key                string
+	UFCode             string
+	Environment        int
+	IssuerTaxID        string
+	DigestValue        string
+	RecipientName      string
+	RecipientDocument  string
+	RecipientForeignID string
+	RecipientStateID   string
+	Signed             bool
+	Purpose            int
+	IssuedAt           string
+	Items              []Item
+	DiscountTotal      string
+	Total              string
+	ICMSTotal          string
+	XML                string
 }
 
 type Result struct {
@@ -101,6 +116,12 @@ type Result struct {
 	Environment int
 	DigestValue string
 	ReceivedAt  time.Time
+	AnswerLost  bool
+}
+
+type outcome struct {
+	status status.Code
+	lost   bool
 }
 
 func (e *Engine) Authorize(submission Submission, context Context) Result {
@@ -141,29 +162,66 @@ func (e *Engine) Authorize(submission Submission, context Context) Result {
 		return refuse(result, code)
 	}
 
-	if forced, matched := e.forced(context, scenario.Match{
-		Operation:   context.Operation,
-		IssuerTaxID: submission.IssuerTaxID,
-		Key:         submission.Key,
-		Model:       string(parsed.Model),
-	}); matched {
-		return e.settle(result, forced, submission, parsed, now)
+	decision := e.outcome(context, matchOf(context, submission.IssuerTaxID, parsed))
+	result.AnswerLost = decision.lost
+	if decision.status != 0 {
+		return e.settle(result, decision.status, submission, parsed, now)
 	}
+	if code, rejected := e.duplicateRejection(environment, submission.IssuerTaxID, parsed); rejected {
+		return refuse(result, code)
+	}
+	return e.settle(result, e.authorizationStatus(submission, parsed, now), submission, parsed, now)
+}
 
-	if _, found := e.documents.Document(parsed.Raw); found {
-		return refuse(result, status.RejectedDuplicate)
+func (e *Engine) duplicateRejection(environment int, issuerTaxID string, parsed dfe.AccessKey) (status.Code, bool) {
+	if document, found := e.documents.Document(parsed.Raw); found {
+		return storedDocumentRejection(document), true
 	}
-	if _, found := e.documents.DocumentByNumber(environment, submission.IssuerTaxID, parsed.Model, parsed.Series, parsed.Number); found {
-		return refuse(result, status.RejectedDuplicateOtherKey)
+	numbering := store.Numbering{Environment: environment, IssuerTaxID: issuerTaxID, Model: parsed.Model, Series: parsed.Series}
+	if _, found := e.documents.DocumentByNumber(numbering, parsed.Number); found {
+		return status.RejectedDuplicateOtherKey, true
 	}
-	if e.documents.NumberVoided(environment, submission.IssuerTaxID, parsed.Model, parsed.Series, parsed.Number) {
-		return refuse(result, status.RejectedDuplicate)
+	if e.documents.RangeVoided(numbering, parsed.Number, parsed.Number) {
+		return status.RejectedVoided, true
 	}
-	return e.settle(result, status.Authorized, submission, parsed, now)
+	return 0, false
+}
+
+func storedDocumentRejection(document store.Document) status.Code {
+	if document.Cancelled {
+		return status.RejectedCancelled
+	}
+	if status.Denied(document.Status) {
+		return status.RejectedDenied
+	}
+	return status.RejectedDuplicate
+}
+
+func (e *Engine) authorizationStatus(submission Submission, parsed dfe.AccessKey, now time.Time) status.Code {
+	if parsed.Model != dfe.ModelNFCe || !contingencyIssuance(parsed.IssuanceKind) {
+		return status.Authorized
+	}
+	issuedAt := parseMoment(submission.IssuedAt)
+	if issuedAt.IsZero() || now.Sub(issuedAt) <= e.options.OfflineDeadline {
+		return status.Authorized
+	}
+	return status.AuthorizedLate
+}
+
+func contingencyIssuance(kind int) bool {
+	return kind == dfe.IssuanceEPEC || kind == dfe.IssuanceOffline
+}
+
+func parseMoment(text string) time.Time {
+	moment, err := time.Parse(time.RFC3339, text)
+	if err != nil {
+		return time.Time{}
+	}
+	return moment
 }
 
 func (e *Engine) settle(result Result, code status.Code, submission Submission, parsed dfe.AccessKey, now time.Time) Result {
-	if code != status.Authorized && !status.Denied(code) {
+	if !status.InUse(code) && !status.Denied(code) {
 		return refuse(result, code)
 	}
 	result.Protocol = e.documents.NextProtocol(parsed.UFCode, now)
@@ -182,19 +240,36 @@ func (e *Engine) settle(result Result, code status.Code, submission Submission, 
 		Status:      code,
 		Reason:      status.MessageFor(result.Model, code),
 		ReceivedAt:  now,
-		XML:         submission.XML,
+		IssuedAt:    parseMoment(submission.IssuedAt),
+		Total:       submission.Total,
+		ICMSTotal:   submission.ICMSTotal,
+		Recipient: store.Recipient{
+			Document:  submission.RecipientDocument,
+			ForeignID: submission.RecipientForeignID,
+			StateID:   submission.RecipientStateID,
+		},
+		Items: submission.Items,
+		XML:   submission.XML,
 	})
 	return result
 }
 
-func (e *Engine) forced(context Context, match scenario.Match) (status.Code, bool) {
-	if code, matched := e.scenarios.Resolve(match); matched {
-		return code, true
+func matchOf(context Context, issuerTaxID string, parsed dfe.AccessKey) scenario.Match {
+	return scenario.Match{
+		Operation:   context.Operation,
+		IssuerTaxID: issuerTaxID,
+		Key:         parsed.Raw,
+		Model:       string(parsed.Model),
+		Issuance:    strconv.Itoa(parsed.IssuanceKind),
 	}
-	if context.ForcedStatus != 0 {
-		return context.ForcedStatus, true
+}
+
+func (e *Engine) outcome(context Context, match scenario.Match) outcome {
+	rule, matched := e.scenarios.Resolve(match)
+	if matched && rule.Status != 0 {
+		return outcome{status: rule.Status, lost: rule.LoseAnswer}
 	}
-	return 0, false
+	return outcome{status: context.ForcedStatus, lost: matched && rule.LoseAnswer}
 }
 
 func refuse(result Result, code status.Code) Result {

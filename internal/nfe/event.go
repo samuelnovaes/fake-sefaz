@@ -27,8 +27,16 @@ func (s *Service) receiveEvents(request authorizer.Context, payload []byte) ([]b
 		response.Reason = status.Message(status.RejectedBatchSchema)
 		return encode(response)
 	}
+	lost := false
 	for _, event := range batch.Events {
 		result := s.engine.RegisterEvent(eventSubmissionOf(event), request)
+		if status.RefusesRequest(result.Status) {
+			response.Status = int(result.Status)
+			response.Reason = result.Reason
+			response.Events = nil
+			return encode(response)
+		}
+		lost = lost || result.AnswerLost
 		rendered := eventResponseOf(event, result)
 		if response.Environment == 0 {
 			response.Environment = result.Environment
@@ -38,20 +46,21 @@ func (s *Service) receiveEvents(request authorizer.Context, payload []byte) ([]b
 		}
 		response.Events = append(response.Events, rendered)
 	}
-	return encode(response)
+	return deliver(response, lost)
 }
 
 func eventSubmissionOf(event Evento) authorizer.EventSubmission {
 	info := event.Info
 	return authorizer.EventSubmission{
-		Key:         info.Key,
-		Type:        info.Type,
-		Sequence:    info.Sequence,
-		Environment: info.Environment,
-		OrganCode:   info.OrganCode,
-		IssuerTaxID: info.Document(),
-		Protocol:    info.Detail.Protocol,
-		XML:         `<evento xmlns="` + Namespace + `" versao="` + Version + `">` + string(event.Inner) + `</evento>`,
+		Key:           info.Key,
+		Type:          info.Type,
+		Sequence:      info.Sequence,
+		Environment:   info.Environment,
+		OrganCode:     info.OrganCode,
+		IssuerTaxID:   info.Document(),
+		Protocol:      info.Detail.Protocol,
+		SubstituteKey: info.Detail.Substitute,
+		XML:           `<evento xmlns="` + Namespace + `" versao="` + Version + `">` + string(event.Inner) + `</evento>`,
 	}
 }
 

@@ -160,8 +160,8 @@ func (s *Server) createScenario(writer http.ResponseWriter, request *http.Reques
 		write(writer, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	if rule.Status == 0 {
-		write(writer, http.StatusBadRequest, map[string]string{"error": "status is required"})
+	if rule.Status == 0 && !rule.LoseAnswer {
+		write(writer, http.StatusBadRequest, map[string]string{"error": "status or loseAnswer is required"})
 		return
 	}
 	write(writer, http.StatusCreated, s.scenarios.Add(rule))

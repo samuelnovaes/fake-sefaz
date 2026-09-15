@@ -41,15 +41,24 @@ type Det struct {
 }
 
 type Prod struct {
-	Quantity  string `xml:"qCom"`
-	UnitValue string `xml:"vUnCom"`
-	Value     string `xml:"vProd"`
-	Discount  string `xml:"vDesc"`
+	Code           string `xml:"cProd"`
+	EAN            string `xml:"cEAN"`
+	Description    string `xml:"xProd"`
+	NCM            string `xml:"NCM"`
+	CFOP           string `xml:"CFOP"`
+	Unit           string `xml:"uCom"`
+	Quantity       string `xml:"qCom"`
+	UnitValue      string `xml:"vUnCom"`
+	Value          string `xml:"vProd"`
+	Discount       string `xml:"vDesc"`
+	TotalIndicator string `xml:"indTot"`
 }
 
 type Total struct {
 	ICMS struct {
+		Tax      string `xml:"vICMS"`
 		Discount string `xml:"vDesc"`
+		Invoice  string `xml:"vNF"`
 	} `xml:"ICMSTot"`
 }
 
@@ -69,7 +78,9 @@ type Ide struct {
 type Party struct {
 	TaxID     string `xml:"CNPJ"`
 	PersonID  string `xml:"CPF"`
+	ForeignID string `xml:"idEstrangeiro"`
 	LegalName string `xml:"xNome"`
+	StateID   string `xml:"IE"`
 }
 
 func (p Party) Document() string {
@@ -146,6 +157,7 @@ type EventoDetalhe struct {
 	Reason      string `xml:"xJust"`
 	Protocol    string `xml:"nProt"`
 	Correction  string `xml:"xCorrecao"`
+	Substitute  string `xml:"chNFeRef"`
 }
 
 func (i InfEvento) Document() string {

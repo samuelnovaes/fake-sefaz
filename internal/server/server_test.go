@@ -52,19 +52,7 @@ func newHarness(t *testing.T) *harness {
 
 func (h *harness) post(t *testing.T, path, payload string, headers map[string]string) string {
 	t.Helper()
-	envelope := `<?xml version="1.0" encoding="utf-8"?>` +
-		`<soap12:Envelope xmlns:soap12="http://www.w3.org/2003/05/soap-envelope"><soap12:Body>` +
-		`<nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">` + payload +
-		`</nfeDadosMsg></soap12:Body></soap12:Envelope>`
-	request, err := http.NewRequest(http.MethodPost, h.server.URL+path, bytes.NewBufferString(envelope))
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	request.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
-	for name, value := range headers {
-		request.Header.Set(name, value)
-	}
-	response, err := h.server.Client().Do(request)
+	response, err := h.send(t, path, payload, headers)
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -77,6 +65,23 @@ func (h *harness) post(t *testing.T, path, payload string, headers map[string]st
 		t.Fatalf("unexpected http status %d: %s", response.StatusCode, body)
 	}
 	return string(body)
+}
+
+func (h *harness) send(t *testing.T, path, payload string, headers map[string]string) (*http.Response, error) {
+	t.Helper()
+	envelope := `<?xml version="1.0" encoding="utf-8"?>` +
+		`<soap12:Envelope xmlns:soap12="http://www.w3.org/2003/05/soap-envelope"><soap12:Body>` +
+		`<nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">` + payload +
+		`</nfeDadosMsg></soap12:Body></soap12:Envelope>`
+	request, err := http.NewRequest(http.MethodPost, h.server.URL+path, bytes.NewBufferString(envelope))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	request.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
+	return h.server.Client().Do(request)
 }
 
 func (h *harness) admin(t *testing.T, method, path, payload string) string {
@@ -107,16 +112,65 @@ func accessKey(number int64, model dfe.Model) string {
 }
 
 type documentOptions struct {
-	Number        int64
-	Model         dfe.Model
-	Environment   int
-	RecipientName string
-	Sync          int
-	Signed        bool
-	Key           string
-	Purpose       int
-	Items         string
-	DiscountTotal string
+	Number            int64
+	Model             dfe.Model
+	Environment       int
+	RecipientName     string
+	RecipientDocument string
+	Sync              int
+	Signed            bool
+	Key               string
+	Purpose           int
+	Items             string
+	DiscountTotal     string
+	IssuanceKind      int
+	RandomCode        string
+	IssuedAt          time.Time
+	Total             string
+	ICMSTotal         string
+}
+
+var brasilia = time.FixedZone("BRT", -3*60*60)
+
+func withDefaults(options documentOptions) documentOptions {
+	if options.IssuanceKind == 0 {
+		options.IssuanceKind = dfe.IssuanceNormal
+	}
+	if options.RandomCode == "" {
+		options.RandomCode = "12345678"
+	}
+	if options.IssuedAt.IsZero() {
+		options.IssuedAt = time.Date(2026, time.September, 10, 9, 0, 0, 0, brasilia)
+	}
+	if options.Total == "" {
+		options.Total = "10.00"
+	}
+	if options.RecipientDocument == "" {
+		options.RecipientDocument = "11144477735"
+	}
+	if options.Purpose == 0 {
+		options.Purpose = 1
+	}
+	return options
+}
+
+func keyOf(options documentOptions) string {
+	options = withDefaults(options)
+	return dfe.BuildAccessKey("35", options.IssuedAt, issuerTaxID, options.Model, 1, options.Number, options.IssuanceKind, options.RandomCode)
+}
+
+func optionalElement(name, value string) string {
+	if value == "" {
+		return ""
+	}
+	return `<` + name + `>` + value + `</` + name + `>`
+}
+
+func contingencyElements(options documentOptions) string {
+	if options.IssuanceKind == dfe.IssuanceNormal {
+		return ""
+	}
+	return optionalElement("dhCont", options.IssuedAt.Format(time.RFC3339)) + optionalElement("xJust", "Falha de comunicacao com a SEFAZ")
 }
 
 func item(quantity, unitValue, value, discount string) string {
@@ -204,9 +258,10 @@ func defaultDocument(number int64) documentOptions {
 }
 
 func buildBatch(options documentOptions) string {
+	options = withDefaults(options)
 	key := options.Key
 	if key == "" {
-		key = accessKey(options.Number, options.Model)
+		key = keyOf(options)
 	}
 	signature := ""
 	if options.Signed {
@@ -215,28 +270,23 @@ func buildBatch(options documentOptions) string {
 	}
 	recipient := ""
 	if options.RecipientName != "" {
-		recipient = `<dest><CPF>11144477735</CPF><xNome>` + options.RecipientName + `</xNome></dest>`
-	}
-	purpose := options.Purpose
-	if purpose == 0 {
-		purpose = 1
-	}
-	discountTotal := ""
-	if options.DiscountTotal != "" {
-		discountTotal = `<vDesc>` + options.DiscountTotal + `</vDesc>`
+		recipient = `<dest><CPF>` + options.RecipientDocument + `</CPF><xNome>` + options.RecipientName + `</xNome></dest>`
 	}
 	return fmt.Sprintf(`<enviNFe versao="4.00" xmlns="http://www.portalfiscal.inf.br/nfe">`+
 		`<idLote>1</idLote><indSinc>%d</indSinc>`+
 		`<NFe><infNFe Id="NFe%s" versao="4.00">`+
-		`<ide><cUF>35</cUF><cNF>12345678</cNF><natOp>Venda</natOp><mod>%s</mod><serie>1</serie><nNF>%d</nNF>`+
-		`<dhEmi>2026-09-10T09:00:00-03:00</dhEmi><tpNF>1</tpNF><idDest>1</idDest><cMunFG>3550308</cMunFG>`+
-		`<tpImp>4</tpImp><tpEmis>1</tpEmis><cDV>%s</cDV><tpAmb>%d</tpAmb><finNFe>%d</finNFe><indFinal>1</indFinal>`+
-		`<indPres>1</indPres><procEmi>0</procEmi><verProc>fake</verProc></ide>`+
+		`<ide><cUF>35</cUF><cNF>%s</cNF><natOp>Venda</natOp><mod>%s</mod><serie>1</serie><nNF>%d</nNF>`+
+		`<dhEmi>%s</dhEmi><tpNF>1</tpNF><idDest>1</idDest><cMunFG>3550308</cMunFG>`+
+		`<tpImp>4</tpImp><tpEmis>%d</tpEmis><cDV>%s</cDV><tpAmb>%d</tpAmb><finNFe>%d</finNFe><indFinal>1</indFinal>`+
+		`<indPres>1</indPres><procEmi>0</procEmi><verProc>fake</verProc>%s</ide>`+
 		`<emit><CNPJ>%s</CNPJ><xNome>VENDER MAIS LTDA</xNome><IE>111111111111</IE></emit>`+
 		`%s%s`+
-		`<total><ICMSTot>%s<vNF>10.00</vNF></ICMSTot></total>`+
+		`<total><ICMSTot>%s%s<vNF>%s</vNF></ICMSTot></total>`+
 		`</infNFe>%s</NFe></enviNFe>`,
-		options.Sync, key, string(options.Model), options.Number, key[43:44], options.Environment, purpose, issuerTaxID, recipient, options.Items, discountTotal, signature)
+		options.Sync, key, options.RandomCode, string(options.Model), options.Number, options.IssuedAt.Format(time.RFC3339),
+		options.IssuanceKind, key[43:44], options.Environment, options.Purpose, contingencyElements(options), issuerTaxID,
+		recipient, options.Items, optionalElement("vICMS", options.ICMSTotal), optionalElement("vDesc", options.DiscountTotal),
+		options.Total, signature)
 }
 
 func statusOf(t *testing.T, body string) string {
@@ -440,7 +490,7 @@ func TestVoidingNumberRange(t *testing.T) {
 		t.Fatalf("expected 102, got %s in %s", got, body)
 	}
 	blocked := testHarness.post(t, "/homologacao/SP/NFeAutorizacao4", buildBatch(defaultDocument(22)), nil)
-	if !strings.Contains(blocked, "<cStat>204</cStat>") {
+	if !strings.Contains(blocked, "<cStat>206</cStat>") {
 		t.Fatalf("expected a voided number to be refused: %s", blocked)
 	}
 }
@@ -450,8 +500,8 @@ func TestVoidingRefusesRangeWithAuthorizedNumber(t *testing.T) {
 	testHarness.post(t, "/homologacao/SP/NFeAutorizacao4", buildBatch(defaultDocument(31)), nil)
 	body := testHarness.post(t, "/homologacao/SP/NFeInutilizacao4", voidRequest(30, 32), nil)
 
-	if got := statusOf(t, body); got != "204" {
-		t.Fatalf("expected 204, got %s in %s", got, body)
+	if got := statusOf(t, body); got != "241" {
+		t.Fatalf("expected 241, got %s in %s", got, body)
 	}
 }
 

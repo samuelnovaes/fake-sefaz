@@ -25,6 +25,7 @@ type VoidResult struct {
 	Reason     string
 	Protocol   string
 	ReceivedAt time.Time
+	AnswerLost bool
 }
 
 func (e *Engine) Void(submission VoidSubmission, context Context) VoidResult {
@@ -38,33 +39,33 @@ func (e *Engine) Void(submission VoidSubmission, context Context) VoidResult {
 	if submission.First <= 0 || submission.Last < submission.First {
 		return refuseVoid(result, status.RejectedSchema)
 	}
-	if forced, matched := e.forced(context, scenario.Match{
+	decision := e.outcome(context, scenario.Match{
 		Operation:   context.Operation,
 		IssuerTaxID: submission.IssuerTaxID,
 		Model:       string(submission.Model),
-	}); matched && forced != status.VoidingAuthorized {
-		return refuseVoid(result, forced)
+	})
+	result.AnswerLost = decision.lost
+	if decision.status != 0 && decision.status != status.VoidingAuthorized {
+		return refuseVoid(result, decision.status)
 	}
 
-	identifier := store.VoidingIdentifier(environment, submission.UFCode, submission.Year,
-		submission.IssuerTaxID, submission.Model, submission.Series, submission.First, submission.Last)
-	if existing, found := e.documents.Voiding(identifier); found {
-		return VoidResult{
-			Status:     existing.Status,
-			Reason:     status.Message(existing.Status),
-			Protocol:   existing.Protocol,
-			ReceivedAt: existing.ReceivedAt,
-		}
+	numbering := store.Numbering{Environment: environment, IssuerTaxID: submission.IssuerTaxID, Model: submission.Model, Series: submission.Series}
+	if existing, found := e.documents.VoidingOfRange(numbering, submission.First, submission.Last); found {
+		refused := refuseVoid(result, status.RejectedVoidingRepeated)
+		refused.Protocol = existing.Protocol
+		return refused
 	}
-	for number := submission.First; number <= submission.Last; number++ {
-		if _, found := e.documents.DocumentByNumber(environment, submission.IssuerTaxID, submission.Model, submission.Series, number); found {
-			return refuseVoid(result, status.RejectedDuplicate)
-		}
+	if e.documents.RangeVoided(numbering, submission.First, submission.Last) {
+		return refuseVoid(result, status.RejectedRangeVoided)
+	}
+	if e.documents.RangeUsed(numbering, submission.First, submission.Last) {
+		return refuseVoid(result, status.RejectedRangeUsed)
 	}
 
 	protocol := e.documents.NextProtocol(submission.UFCode, now)
 	e.documents.SaveVoiding(store.Voiding{
-		Identifier:  identifier,
+		Identifier: store.VoidingIdentifier(environment, submission.UFCode, submission.Year,
+			submission.IssuerTaxID, submission.Model, submission.Series, submission.First, submission.Last),
 		Environment: environment,
 		UFCode:      submission.UFCode,
 		Year:        submission.Year,
@@ -82,6 +83,7 @@ func (e *Engine) Void(submission VoidSubmission, context Context) VoidResult {
 		Reason:     status.Message(status.VoidingAuthorized),
 		Protocol:   protocol,
 		ReceivedAt: now,
+		AnswerLost: result.AnswerLost,
 	}
 }
 

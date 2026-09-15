@@ -11,6 +11,8 @@ type Config struct {
 	SchemaDirectory          string
 	CancellationWindow       time.Duration
 	CancellationWindowNFCe   time.Duration
+	SubstitutionWindow       time.Duration
+	OfflineDeadline          time.Duration
 	MaxDistributionDocuments int
 }
 
@@ -20,6 +22,8 @@ func Load() Config {
 		SchemaDirectory:          text("FAKE_SEFAZ_SCHEMA_DIR", ""),
 		CancellationWindow:       duration("FAKE_SEFAZ_CANCELLATION_WINDOW", 24*time.Hour),
 		CancellationWindowNFCe:   duration("FAKE_SEFAZ_CANCELLATION_WINDOW_NFCE", 30*time.Minute),
+		SubstitutionWindow:       duration("FAKE_SEFAZ_SUBSTITUTION_WINDOW", 168*time.Hour),
+		OfflineDeadline:          duration("FAKE_SEFAZ_OFFLINE_DEADLINE", 24*time.Hour),
 		MaxDistributionDocuments: number("FAKE_SEFAZ_MAX_DISTRIBUTION_DOCUMENTS", 50),
 	}
 }

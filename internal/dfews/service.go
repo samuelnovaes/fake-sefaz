@@ -67,6 +67,9 @@ func (s *Service) receive(current operation, request authorizer.Context, message
 		Signed:            document.Signed,
 		XML:               document.XML,
 	}, request)
+	if result.AnswerLost {
+		return nil, authorizer.ErrAnswerLost
+	}
 
 	response := element(current.spec.ReceiveResponse).
 		attribute("versao", current.version()).
@@ -156,6 +159,9 @@ func (s *Service) event(current operation, request authorizer.Context, message s
 		Protocol:    fields["nProt"],
 		XML:         string(message.Element),
 	}, request)
+	if result.AnswerLost {
+		return nil, authorizer.ErrAnswerLost
+	}
 
 	model := result.Model
 	if model == "" {

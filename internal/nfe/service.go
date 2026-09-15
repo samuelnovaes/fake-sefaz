@@ -88,6 +88,13 @@ func encode(document any) ([]byte, error) {
 	return xml.Marshal(document)
 }
 
+func deliver(document any, lost bool) ([]byte, error) {
+	if lost {
+		return nil, authorizer.ErrAnswerLost
+	}
+	return encode(document)
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if value != "" {

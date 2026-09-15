@@ -9,13 +9,6 @@ import (
 
 const PurposeNormal = 1
 
-type Item struct {
-	Quantity  string
-	UnitValue string
-	Value     string
-	Discount  string
-}
-
 type decimal struct {
 	digits *big.Int
 	scale  int
@@ -70,6 +63,17 @@ func discountTotalMatches(submission Submission) bool {
 		sum.Add(sum, discount)
 	}
 	return withinCent(sum, total)
+}
+
+func sameDecimal(first, second string) bool {
+	left, leftValid := parseDecimal(first)
+	right, rightValid := parseDecimal(second)
+	if !leftValid || !rightValid {
+		return strings.TrimSpace(first) == strings.TrimSpace(second)
+	}
+	leftScaled := new(big.Int).Mul(left.digits, powerOfTen(right.scale))
+	rightScaled := new(big.Int).Mul(right.digits, powerOfTen(left.scale))
+	return leftScaled.Cmp(rightScaled) == 0
 }
 
 func withinCent(calculated, informed *big.Int) bool {

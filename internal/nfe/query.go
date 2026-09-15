@@ -4,7 +4,6 @@ import (
 	"github.com/vendermais/fake-sefaz/internal/authorizer"
 	"strconv"
 
-	"github.com/vendermais/fake-sefaz/internal/dfe"
 	"github.com/vendermais/fake-sefaz/internal/status"
 	"github.com/vendermais/fake-sefaz/internal/store"
 )
@@ -63,27 +62,16 @@ func (s *Service) documentStatus(request authorizer.Context, payload []byte) ([]
 		UFCode:      request.UFCode,
 		Key:         query.Key,
 	}
-	parsed, err := dfe.ParseAccessKey(query.Key)
-	if err != nil {
-		response.Status = int(status.RejectedCheckDigit)
-		response.Reason = status.Message(status.RejectedCheckDigit)
+	consultation := s.engine.Consult(query.Key, response.Environment)
+	response.Status = int(consultation.Status)
+	response.Reason = consultation.Reason
+	response.UFCode = firstNonEmpty(consultation.UFCode, response.UFCode)
+	if !consultation.Found {
 		return encode(response)
 	}
-	response.UFCode = parsed.UFCode
-	document, found := s.engine.Documents().Document(parsed.Raw)
-	if !found {
-		response.Status = int(status.RejectedNotFound)
-		response.Reason = status.Message(status.RejectedNotFound)
-		return encode(response)
-	}
+	document := consultation.Document
 	protocol := protocolOf(document)
 	response.Protocol = &protocol
-	response.Status = int(document.Status)
-	response.Reason = status.Message(document.Status)
-	if document.Cancelled {
-		response.Status = int(status.CancellationAuthorized)
-		response.Reason = status.Message(status.CancellationAuthorized)
-	}
 	for _, event := range document.Events {
 		response.Events = append(response.Events, ProcEventoNFe{
 			Version: Version,

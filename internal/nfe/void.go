@@ -45,7 +45,7 @@ func (s *Service) void(request authorizer.Context, payload []byte) ([]byte, erro
 		answer.ReceivedAt = timestamp(result.ReceivedAt)
 		answer.Identifier = voidingIdentifierTag(answer)
 	}
-	return encode(RetInutNFe{Version: Version, Info: answer})
+	return deliver(RetInutNFe{Version: Version, Info: answer}, result.AnswerLost)
 }
 
 func voidingIdentifierTag(result InfInutRet) string {

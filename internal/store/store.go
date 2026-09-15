@@ -21,6 +21,27 @@ type Event struct {
 	RegisteredAt time.Time   `json:"registeredAt"`
 	XML          string      `json:"xml"`
 	NSU          int64       `json:"nsu"`
+	Cancelling   bool        `json:"cancelling"`
+}
+
+type Item struct {
+	Code           string `json:"code,omitempty"`
+	EAN            string `json:"ean,omitempty"`
+	Description    string `json:"description,omitempty"`
+	NCM            string `json:"ncm,omitempty"`
+	CFOP           string `json:"cfop,omitempty"`
+	Unit           string `json:"unit,omitempty"`
+	Quantity       string `json:"quantity,omitempty"`
+	UnitValue      string `json:"unitValue,omitempty"`
+	Value          string `json:"value,omitempty"`
+	Discount       string `json:"discount,omitempty"`
+	TotalIndicator string `json:"totalIndicator,omitempty"`
+}
+
+type Recipient struct {
+	Document  string `json:"document,omitempty"`
+	ForeignID string `json:"foreignId,omitempty"`
+	StateID   string `json:"stateId,omitempty"`
 }
 
 type Document struct {
@@ -36,6 +57,11 @@ type Document struct {
 	Status      status.Code `json:"status"`
 	Reason      string      `json:"reason"`
 	ReceivedAt  time.Time   `json:"receivedAt"`
+	IssuedAt    time.Time   `json:"issuedAt"`
+	Total       string      `json:"total,omitempty"`
+	ICMSTotal   string      `json:"icmsTotal,omitempty"`
+	Recipient   Recipient   `json:"recipient"`
+	Items       []Item      `json:"items,omitempty"`
 	XML         string      `json:"xml"`
 	Cancelled   bool        `json:"cancelled"`
 	Events      []Event     `json:"events"`
@@ -65,6 +91,13 @@ type Voiding struct {
 	Protocol    string      `json:"protocol"`
 	Status      status.Code `json:"status"`
 	ReceivedAt  time.Time   `json:"receivedAt"`
+}
+
+type Numbering struct {
+	Environment int
+	IssuerTaxID string
+	Model       dfe.Model
+	Series      int
 }
 
 type Store struct {
@@ -147,7 +180,7 @@ func (s *Store) AppendEvent(key string, event Event) (Event, bool) {
 		return event, false
 	}
 	document.Events = append(document.Events, event)
-	if event.Type == dfe.EventCancellation && event.Status == status.CancellationAuthorized {
+	if event.Cancelling {
 		document.Cancelled = true
 	}
 	return event, true
@@ -194,16 +227,6 @@ func (s *Store) SaveVoiding(voiding Voiding) Voiding {
 	return stored
 }
 
-func (s *Store) Voiding(identifier string) (Voiding, bool) {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-	voiding, found := s.voidings[identifier]
-	if !found {
-		return Voiding{}, false
-	}
-	return *voiding, true
-}
-
 func (s *Store) Voidings() []Voiding {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
@@ -247,34 +270,54 @@ func VoidingIdentifier(environment int, ufCode string, year int, issuerTaxID str
 	}, "-")
 }
 
-func (s *Store) DocumentByNumber(environment int, issuerTaxID string, model dfe.Model, series int, number int64) (Document, bool) {
+func (s *Store) DocumentByNumber(numbering Numbering, number int64) (Document, bool) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 	for _, document := range s.documents {
-		if document.Environment != environment || document.IssuerTaxID != issuerTaxID {
-			continue
+		if numbering.holdsDocument(*document) && document.Number == number {
+			return *document, true
 		}
-		if document.Model != model || document.Series != series || document.Number != number {
-			continue
-		}
-		return *document, true
 	}
 	return Document{}, false
 }
 
-func (s *Store) NumberVoided(environment int, issuerTaxID string, model dfe.Model, series int, number int64) bool {
+func (s *Store) RangeUsed(numbering Numbering, first, last int64) bool {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
-	for _, voiding := range s.voidings {
-		if voiding.Environment != environment || voiding.IssuerTaxID != issuerTaxID {
-			continue
-		}
-		if voiding.Model != model || voiding.Series != series {
-			continue
-		}
-		if number >= voiding.First && number <= voiding.Last {
+	for _, document := range s.documents {
+		if numbering.holdsDocument(*document) && document.Number >= first && document.Number <= last {
 			return true
 		}
 	}
 	return false
+}
+
+func (s *Store) VoidingOfRange(numbering Numbering, first, last int64) (Voiding, bool) {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	for _, voiding := range s.voidings {
+		if numbering.holdsVoiding(*voiding) && voiding.First == first && voiding.Last == last {
+			return *voiding, true
+		}
+	}
+	return Voiding{}, false
+}
+
+func (s *Store) RangeVoided(numbering Numbering, first, last int64) bool {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	for _, voiding := range s.voidings {
+		if numbering.holdsVoiding(*voiding) && first <= voiding.Last && last >= voiding.First {
+			return true
+		}
+	}
+	return false
+}
+
+func (n Numbering) holdsDocument(document Document) bool {
+	return n == Numbering{document.Environment, document.IssuerTaxID, document.Model, document.Series}
+}
+
+func (n Numbering) holdsVoiding(voiding Voiding) bool {
+	return n == Numbering{voiding.Environment, voiding.IssuerTaxID, voiding.Model, voiding.Series}
 }

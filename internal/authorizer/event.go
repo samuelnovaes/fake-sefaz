@@ -4,20 +4,20 @@ import (
 	"time"
 
 	"github.com/vendermais/fake-sefaz/internal/dfe"
-	"github.com/vendermais/fake-sefaz/internal/scenario"
 	"github.com/vendermais/fake-sefaz/internal/status"
 	"github.com/vendermais/fake-sefaz/internal/store"
 )
 
 type EventSubmission struct {
-	Key         string
-	Type        string
-	Sequence    int
-	Environment int
-	OrganCode   string
-	IssuerTaxID string
-	Protocol    string
-	XML         string
+	Key           string
+	Type          string
+	Sequence      int
+	Environment   int
+	OrganCode     string
+	IssuerTaxID   string
+	Protocol      string
+	SubstituteKey string
+	XML           string
 }
 
 type EventResult struct {
@@ -29,6 +29,7 @@ type EventResult struct {
 	Environment  int
 	Model        dfe.Model
 	RegisteredAt time.Time
+	AnswerLost   bool
 }
 
 func (e *Engine) RegisterEvent(submission EventSubmission, context Context) EventResult {
@@ -51,13 +52,14 @@ func (e *Engine) RegisterEvent(submission EventSubmission, context Context) Even
 	}
 	result.Description = description
 
-	if forced, matched := e.forced(context, scenario.Match{
-		Operation:   context.Operation,
-		IssuerTaxID: submission.IssuerTaxID,
-		Key:         submission.Key,
-		Model:       string(parsed.Model),
-	}); matched && forced != status.EventLinked && forced != status.CancellationAuthorized {
-		return refuseEvent(result, forced)
+	decision := e.outcome(context, matchOf(context, submission.IssuerTaxID, parsed))
+	result.AnswerLost = decision.lost
+	if decision.status != 0 && decision.status != status.EventLinked && decision.status != status.CancellationAuthorized {
+		return refuseEvent(result, decision.status)
+	}
+
+	if parsed.Model == dfe.ModelNFCe && submission.Type == dfe.EventCancellationBySwap {
+		return e.cancelBySubstitution(result, submission, parsed, now)
 	}
 
 	if e.documents.HasEvent(parsed.Raw, submission.Type, submission.Sequence) {
@@ -69,7 +71,7 @@ func (e *Engine) RegisterEvent(submission EventSubmission, context Context) Even
 		if dfe.EventLinksToDocument(submission.Type) {
 			return refuseEvent(result, status.RejectedNotFound)
 		}
-		return e.recordEvent(result, submission, parsed, status.EventNotLinked, now)
+		return e.recordEvent(result, submission, parsed, status.EventNotLinked, false, now)
 	}
 
 	if submission.Type == dfe.EventCancellation {
@@ -82,12 +84,12 @@ func (e *Engine) RegisterEvent(submission EventSubmission, context Context) Even
 		if now.Sub(document.ReceivedAt) > e.cancellationWindow(parsed.Model) {
 			return refuseEvent(result, status.RejectedCancellationDeadline)
 		}
-		return e.recordEvent(result, submission, parsed, status.CancellationAuthorized, now)
+		return e.recordEvent(result, submission, parsed, status.CancellationAuthorized, true, now)
 	}
-	return e.recordEvent(result, submission, parsed, status.EventLinked, now)
+	return e.recordEvent(result, submission, parsed, status.EventLinked, false, now)
 }
 
-func (e *Engine) recordEvent(result EventResult, submission EventSubmission, parsed dfe.AccessKey, code status.Code, now time.Time) EventResult {
+func (e *Engine) recordEvent(result EventResult, submission EventSubmission, parsed dfe.AccessKey, code status.Code, cancelling bool, now time.Time) EventResult {
 	protocol := e.documents.NextProtocol(parsed.UFCode, now)
 	result.Status = code
 	result.Reason = status.MessageFor(result.Model, code)
@@ -102,6 +104,7 @@ func (e *Engine) recordEvent(result EventResult, submission EventSubmission, par
 		Status:       code,
 		RegisteredAt: now,
 		XML:          submission.XML,
+		Cancelling:   cancelling,
 	})
 	return result
 }

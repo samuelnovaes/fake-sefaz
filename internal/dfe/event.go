@@ -1,6 +1,12 @@
 package dfe
 
 const (
+	IssuanceNormal  = 1
+	IssuanceEPEC    = 4
+	IssuanceOffline = 9
+)
+
+const (
 	EventCorrection            = "110110"
 	EventCancellation          = "110111"
 	EventCancellationBySwap    = "110112"
@@ -22,7 +28,6 @@ var eventCatalogue = map[Model]map[string]string{
 	ModelNFe: {
 		EventCorrection:            "Carta de Correcao",
 		EventCancellation:          "Cancelamento",
-		EventCancellationBySwap:    "Cancelamento por substituicao",
 		EventOperationConfirmed:    "Confirmacao da Operacao",
 		EventOperationAcknowledged: "Ciencia da Operacao",
 		EventOperationUnknown:      "Desconhecimento da Operacao",
@@ -55,8 +60,17 @@ var eventCatalogue = map[Model]map[string]string{
 }
 
 func init() {
-	eventCatalogue[ModelNFCe] = eventCatalogue[ModelNFe]
+	eventCatalogue[ModelNFCe] = extendedEvents(eventCatalogue[ModelNFe], EventCancellationBySwap, "Cancelamento por substituicao")
 	eventCatalogue[ModelCTeOS] = eventCatalogue[ModelCTe]
+}
+
+func extendedEvents(events map[string]string, eventType, description string) map[string]string {
+	extended := make(map[string]string, len(events)+1)
+	for existing, text := range events {
+		extended[existing] = text
+	}
+	extended[eventType] = description
+	return extended
 }
 
 func EventDescription(model Model, eventType string) (string, bool) {

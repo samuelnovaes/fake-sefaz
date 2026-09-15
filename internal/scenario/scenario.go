@@ -14,7 +14,9 @@ type Rule struct {
 	IssuerTaxID string      `json:"issuerTaxId,omitempty"`
 	KeySuffix   string      `json:"keySuffix,omitempty"`
 	Model       string      `json:"model,omitempty"`
-	Status      status.Code `json:"status"`
+	Issuance    string      `json:"issuance,omitempty"`
+	Status      status.Code `json:"status,omitempty"`
+	LoseAnswer  bool        `json:"loseAnswer,omitempty"`
 	Remaining   int         `json:"remaining,omitempty"`
 }
 
@@ -23,6 +25,7 @@ type Match struct {
 	IssuerTaxID string
 	Key         string
 	Model       string
+	Issuance    string
 }
 
 type Engine struct {
@@ -73,23 +76,23 @@ func (e *Engine) Clear() {
 	e.rules = nil
 }
 
-func (e *Engine) Resolve(match Match) (status.Code, bool) {
+func (e *Engine) Resolve(match Match) (Rule, bool) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 	for index := range e.rules {
-		rule := &e.rules[index]
-		if !applies(*rule, match) {
+		rule := e.rules[index]
+		if !applies(rule, match) {
 			continue
 		}
 		if rule.Remaining > 0 {
-			rule.Remaining--
-			if rule.Remaining == 0 {
+			e.rules[index].Remaining--
+			if e.rules[index].Remaining == 0 {
 				e.rules = append(e.rules[:index], e.rules[index+1:]...)
 			}
 		}
-		return rule.Status, true
+		return rule, true
 	}
-	return 0, false
+	return Rule{}, false
 }
 
 func applies(rule Rule, match Match) bool {
@@ -100,6 +103,9 @@ func applies(rule Rule, match Match) bool {
 		return false
 	}
 	if rule.Model != "" && rule.Model != match.Model {
+		return false
+	}
+	if rule.Issuance != "" && rule.Issuance != match.Issuance {
 		return false
 	}
 	if rule.KeySuffix != "" && !strings.HasSuffix(match.Key, rule.KeySuffix) {
