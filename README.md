@@ -33,6 +33,8 @@ It listens on `:8080` by default. Configuration comes from the environment:
 | `FAKE_SEFAZ_ADDRESS` | `:8080` | Listen address |
 | `FAKE_SEFAZ_CANCELLATION_WINDOW` | `24h` | Cancellation deadline for model 55 |
 | `FAKE_SEFAZ_CANCELLATION_WINDOW_NFCE` | `30m` | Cancellation deadline for model 65 |
+| `FAKE_SEFAZ_SUBSTITUTION_WINDOW` | `168h` | Deadline of the NFC-e cancellation by substitution, counted from the authorization |
+| `FAKE_SEFAZ_OFFLINE_DEADLINE` | `24h` | Delay after `dhEmi` past which an NFC-e issued in contingency is answered `150` |
 | `FAKE_SEFAZ_MAX_DISTRIBUTION_DOCUMENTS` | `50` | Documents per `distDFeInt` answer |
 | `FAKE_SEFAZ_SCHEMA_DIR` | empty | Directory with the XSD packages; empty turns schema validation off |
 
@@ -106,7 +108,8 @@ Events per model:
 
 | Model | Events |
 | --- | --- |
-| NF-e, NFC-e | correction letter, cancellation, cancellation by substitution, and the four recipient acknowledgements |
+| NF-e | correction letter, cancellation and the four recipient acknowledgements |
+| NFC-e | the NF-e events plus cancellation by substitution |
 | CT-e, CT-e OS | correction letter, cancellation, EPEC, delivery receipt, service disagreement |
 | MDF-e | cancellation, closing, driver added, document added |
 | BP-e | cancellation, boarding missed, seat changed |
@@ -196,12 +199,43 @@ client happen on their own:
   (MOC rule I11-10)
 - `537` NF-e or NFC-e whose `ICMSTot/vDesc` differs from the sum of the items'
   `vDesc` by more than R$ 0,01 (MOC rule W10-10)
-- `204` access key already authorized, or number already voided
+- `204` access key already authorized, `218` when that document is cancelled
+  and `205` when it is denied (MOC Anexo I rules 2B08-20, 2B08-30, 2B08-40)
+- `206` number already voided (rule 3B08-100)
 - `539` same issuer, model, series and number under a different access key
+- `150` instead of `100` for an NFC-e with `tpEmis` 4 or 9 received more than
+  `FAKE_SEFAZ_OFFLINE_DEADLINE` after its `dhEmi` (rule B09-40, exception 2)
 - `217` query or event for a document that was never authorized
+- `562`, `561` and `613` for a query whose key is unknown while a document with
+  the same issuer, model, series and number exists: different `cNF` (the stored
+  key is appended as `[chNFe:...]`), different month, any other difference
+  (MOC Visao Geral rules J03 to J06)
+- `563` voiding a range already voided, answered with the earlier `nProt`;
+  `256` a range overlapping a voided one; `241` a range holding a used number
+  (rules I07, I07a, I08)
 - `573` event repeated for the same key, type and sequence
 - `501` cancellation past the deadline for the model
 - `106` receipt not found, `105` batch still processing
+
+Cancellation by substitution, event `110112`, exists for model 65 only; model
+55 answers `215` for it. It follows table 5-38 of the Visao Geral:
+
+- `920` the cancelled NFC-e was not issued with `tpEmis` 1
+- `910` `chNFeRef` invalid (check digit, UF, year, month, CNPJ/CPF, model,
+  number) and `911` incorrect (same key, UF, CNPJ/CPF, year-month outside the
+  cancelled key's month or the one before it, model), with the field in xMotivo
+- `573` repeated event, `494` cancelled NFC-e unknown
+- `501` more than `FAKE_SEFAZ_SUBSTITUTION_WINDOW` after the authorization
+- `580` cancelled NFC-e already cancelled or denied, `222` `nProt` differs
+- `912` substitute unknown, `913` substitute denied or cancelled
+- `914` substitute `dhEmi` more than two hours after the cancelled `dhEmi`
+- `915` `vNF`, `916` `vICMS`, `917` recipient (`CNPJ`/`CPF`/`idEstrangeiro`,
+  `IE`), `918` item count, `919` an item's `cProd`, `cEAN`, `xProd`, `NCM`,
+  `CFOP`, `uCom`, `qCom`, `vUnCom`, `vProd` or `indTot` differ
+- `921` substitute issued with `tpEmis` 1
+
+An accepted substitution answers `135`, marks the NFC-e cancelled, and its
+query answers `101` with `protNFe` and the `procEventoNFe`.
 
 ## Forcing an outcome
 
@@ -220,9 +254,34 @@ curl -X POST localhost:8080/admin/scenarios \
   -d '{"operation":"enviNFe","issuerTaxId":"99999999000191","status":301,"remaining":1}'
 ```
 
-A rule matches on any combination of `operation`, `issuerTaxId`, `model` and
-`keySuffix`. `remaining` makes it expire after that many hits; leave it out for
-a rule that never expires.
+A rule matches on any combination of `operation`, `issuerTaxId`, `model`,
+`keySuffix` and `issuance`, the `tpEmis` digit of the access key. Refusing only
+the off-line retransmission:
+
+```
+curl -X POST localhost:8080/admin/scenarios \
+  -d '{"operation":"enviNFe","issuance":"9","status":778}'
+```
+
+`remaining` makes it expire after that many hits; leave it out for a rule that
+never expires.
+
+`loseAnswer` processes the request normally, or with the forced `status` when
+one is given, stores the outcome, and then drops the connection without writing
+any HTTP response, the way a timeout after the SEFAZ processed the request looks
+to the client. A later query of the key answers `100` with its protocol:
+
+```
+curl -X POST localhost:8080/admin/scenarios \
+  -d '{"operation":"enviNFe","loseAnswer":true,"remaining":1}'
+```
+
+It applies to authorization, voiding and events of the SOAP models; the CF-e
+SAT commands ignore it.
+
+`656`, consumo indevido, refuses the whole request when forced, on
+`retEnviNFe` or `retEnvEvento`, because the MOC blocks the web service rather
+than one document.
 
 ## Admin API
 
@@ -263,6 +322,16 @@ receipt, is the same call with `{"asynchronous":true,"averageTime":3}`.
 - Asynchronous authorization for the models other than NF-e and NFC-e. CT-e,
   MDF-e, BP-e and NF3e are answered synchronously, which is how their current
   layouts work anyway.
+- The state specific contingency deadlines. The MOC gives 24 hours in rule
+  B09-40 and the end of the first business day after the issuance in Anexo IV,
+  both at the state's discretion; a single `FAKE_SEFAZ_OFFLINE_DEADLINE`
+  counted from `dhEmi` stands for them, and no calendar of business days is
+  kept. Rules B09-10 (`703`) and B09-40 (`704`) on the delay of `dhEmi` are not
+  applied.
+- The event rules that need data the service does not keep or check: author
+  and certificate (`574`, `489`, `490`, `408`, `455`, `466`), taxpayer
+  registry (`203`, `240`), event date (`577`, `578`, `579`), sequence limit
+  (`594`), and the deferred extension request (`811`).
 - The MDF-e specific pair of codes for the non-closed query. `MDFeConsNaoEnc`
   answers `138` and `137`, the generic located and not located codes, because
   no `cStat` is invented here.
