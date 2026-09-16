@@ -75,6 +75,8 @@ internal/
 - Every operation is covered end to end through `httptest` in `internal/server`
   with real SOAP envelopes, asserting the `cStat`. A rejection rule is not done
   until a test triggers it. The clock is injected; no test sleeps.
+- Run only the tests of the packages that changed (`go test ./internal/<package>/...`),
+  never `go test ./...`, unless the user asks.
 - Before touching the validator, also run it against the published packages:
   `FAKE_SEFAZ_SCHEMA_DIR=$PWD/schemas go test ./...`
 
